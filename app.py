@@ -1,7 +1,7 @@
 """
-Ecommerce Profit Dashboard v5.1
+Ecommerce Profit Dashboard v5.2
 Multi-Country · Dropi + Facebook + TikTok
-Reverse Campaign Mapping · AI with Country · Currency Fix
+Fix: Batch Editing (Formularios para evitar recargas constantes)
 """
 import streamlit as st, pandas as pd, io
 try:
@@ -22,7 +22,6 @@ STATUS_ENT=["ENTREGADO"]; STATUS_CAN=["CANCELADO"]
 STATUS_TRA=["EN TRANSITO","EN TRÁNSITO","EN ESPERA DE RUTA DOMESTICA","DESPACHADA","DESPACHADO","ENVIADO","EN REPARTO","EN RUTA","EN BODEGA TRANSPORTADORA","EN BODEGA DESTINO","GUIA IMPRESA","EN ALISTAMIENTO","EN CAMINO","ESPERANDO RUTA"]
 STATUS_DEV=["DEVOLUCION","DEVOLUCIÓN","EN DEVOLUCION","EN DEVOLUCIÓN"]; STATUS_NOV=["NOVEDAD","CON NOVEDAD"]
 
-# Country aliases for campaign parsing
 COUNTRY_ALIASES={"CO":"Colombia","COL":"Colombia","COLOMBIA":"Colombia","EC":"Ecuador","ECU":"Ecuador","ECUADOR":"Ecuador","GT":"Guatemala","GUA":"Guatemala","GUATEMALA":"Guatemala"}
 
 def ms(s,pats): return any(p in s.upper().strip() for p in pats)
@@ -172,18 +171,11 @@ def fmt_cop(v): return f"$ {v:,.0f}".replace(",",".")
 def pof(p,w): return f"{(p/w*100):.1f}%" if w else "0%"
 
 def parse_campaign_country(camp_name):
-    """Extract country from campaign name. Format: [PAIS] - PRODUCTO - [FECHA]"""
     parts=[x.strip().upper() for x in str(camp_name).split("-")]
     if parts:
         first=parts[0].strip()
         return COUNTRY_ALIASES.get(first,None)
     return None
-
-def parse_campaign_product(camp_name):
-    """Extract product keyword from campaign. Format: [PAIS] - PRODUCTO - [FECHA]"""
-    parts=[x.strip() for x in str(camp_name).split("-")]
-    if len(parts)>=2: return parts[1].strip()
-    return camp_name.strip()
 
 def agg_orders(df):
     F={c:c in df.columns for c in ["ID","ESTATUS","TOTAL DE LA ORDEN","PRODUCTO","CANTIDAD","GANANCIA","PRECIO FLETE","PRECIO PROVEEDOR","COSTO DEVOLUCION FLETE","CIUDAD DESTINO","FECHA","GRUPO_PRODUCTO","PRECIO PROVEEDOR X CANTIDAD"]}
@@ -234,7 +226,6 @@ def status_pill(s):
 def to_excel(df):
     buf=io.BytesIO();df.to_excel(buf,index=False,engine="openpyxl");return buf.getvalue()
 
-# Facebook/TikTok
 def fb_spend(tok,cid,i,f):
     if not tok or not cid: return 0.0
     cid=cid.strip()
@@ -273,38 +264,22 @@ def tt_spend(tok,aid,i,f):
     return 0.0
 
 def ai_map_with_country(camps_with_spend, products_by_country, key):
-    """AI mapping that considers country. camps_with_spend: list of {name,spend,country_detected}. products_by_country: {country: [products]}"""
     if not key: return {}
     camp_info = [{"campaign": c["name"], "country_detected": c.get("country","Unknown"), "spend": c["spend"]} for c in camps_with_spend]
     prompt = f"""Eres un asistente que empareja campañas de Facebook con productos de Dropi.
-
-Las campañas siguen el formato: [PAÍS] - PRODUCTO - [FECHA]
-El PAÍS de la campaña indica a qué país pertenece ese gasto.
-
-Campañas (con país detectado y gasto):
-{json.dumps(camp_info, ensure_ascii=False)}
-
-Productos por país en Dropi:
-{json.dumps(products_by_country, ensure_ascii=False)}
-
-REGLAS:
-1. Empareja cada campaña con el producto del MISMO PAÍS
-2. Si la campaña dice "CO" o "COL", busca en productos de Colombia
-3. Si dice "EC" o "ECU", busca en Ecuador
-4. Si dice "GT" o "GUA", busca en Guatemala
-5. Basate en similitud de texto del nombre del producto
-
-Responde SOLO un JSON: {{"nombre_campaña": "nombre_producto_dropi", ...}}
-Si no hay match, omite esa campaña."""
-
+    Campañas: {json.dumps(camp_info, ensure_ascii=False)}
+    Productos por país: {json.dumps(products_by_country, ensure_ascii=False)}
+    REGLAS:
+    1. Empareja cada campaña con el producto del MISMO PAÍS (CO/EC/GT)
+    2. Basate en similitud de texto.
+    Responde SOLO un JSON: {{"nombre_campaña": "nombre_producto_dropi", ...}}"""
     try:
         r=requests.post("https://api.openai.com/v1/chat/completions",headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},
             json={"model":"gpt-4o-mini","messages":[{"role":"user","content":prompt}],"temperature":0.1,"max_tokens":3000},timeout=45)
         txt=r.json()["choices"][0]["message"]["content"].strip()
         txt=re.sub(r'^```json\s*','',txt);txt=re.sub(r'```$','',txt)
         return json.loads(txt)
-    except Exception as e:
-        st.error(f"Error IA: {e}"); return {}
+    except Exception as e: st.error(f"Error IA: {e}"); return {}
 
 def render_logistics(label,k,C_):
     no=k["n_ord"];nc=k["n_can"];ne=k["n_ent"];nt=k["n_tra"];nv=k["n_dev"];nn=k["n_nov"];nother=k["n_otr"];nnc=no-nc
@@ -325,7 +300,7 @@ trm=get_trm();trm_usd=trm.get("COP_USD",4200);trm_gtq=trm.get("COP_GTQ",540)
 # ═══ SIDEBAR ═══
 cfg=load_cfg()
 with st.sidebar:
-    st.markdown("### 📊 Dashboard v5.1")
+    st.markdown("### 📊 Dashboard v5.2")
     st.divider()
     st.markdown("##### 📢 Publicidad")
     usar_api=st.checkbox("Usar APIs",value=True)
@@ -342,13 +317,11 @@ with st.sidebar:
         else:
             v=st.text_input("IDs FB (coma)",value=cfg.get("fb_cids",""))
             if v: save_cfg("fb_cids",v);fb_cids=[x.strip() for x in v.split(",") if x.strip()]
-            if fb_token and not accts: st.caption("⚠ Verifica token")
         tt_token=st.text_input("Token TT",type="password",value=cfg.get("tt_token",""),key="ttt")
         tt_inp=st.text_input("Adv IDs TT",value=cfg.get("tt_aids",""))
         if tt_token: save_cfg("tt_token",tt_token)
         if tt_inp: save_cfg("tt_aids",tt_inp);tt_aids=[x.strip() for x in tt_inp.split(",") if x.strip()]
         st.caption(f"TRM: 1 USD={trm_usd:,.0f} COP · 1 GTQ≈{trm_gtq:,.0f} COP")
-        st.caption("💡 FB reporta en COP. Se convierte a moneda local por país.")
     ads_manual={}
     if not usar_api:
         for pn in PAISES: ads_manual[pn]=st.number_input(f"Ads {pn} ({PAISES[pn]['moneda']})",min_value=0.0,value=0.0,step=1000.0,key=f"gm_{pn}")
@@ -420,12 +393,10 @@ for pn in PAISES:
     df_f=filtrar(cargar(st.session_state[f"_b_{pn}"],st.session_state[f"_n_{pn}"]),f_ini,f_fin)
     if df_f.empty: continue
     mon=PAISES[pn]["moneda"]
-    # FIX #3: Products strictly per country — only use products from THIS country's file
     if "PRODUCTO" in df_f.columns:
         sv=PM.get(pn,{})
         country_products=sorted(df_f["PRODUCTO"].dropna().unique())
         if sv:
-            # Validate saved groups only contain products from this country
             valid_sv={}
             cp_set=set(p.upper().strip() for p in country_products)
             for gn,ors in sv.items():
@@ -435,7 +406,6 @@ for pn in PAISES:
         else:
             ag=build_groups(country_products);df_f=apply_groups(df_f,ag);PM[pn]=ag;save_mappings(PM)
     df_ord,F=agg_orders(df_f)
-    # FIX #4: Ads in COP, convert to local currency for KPI calculation
     if usar_api:
         r_=crl.get(pn,0)/max(tr,1)
         gfb_local=cop_to(gfb_cop*r_,mon,trm);gtt_local=cop_to(gtt_cop*r_,mon,trm)
@@ -448,12 +418,11 @@ for pn in PAISES:
     CD[pn]={"df":df_f,"df_ord":df_ord,"kpis":kpis,"F":F}
 if not CD: st.warning("Sin datos.");st.stop()
 
-# ═══ FIX #3: Product grouping STRICTLY per country ═══
+# ═══ FIX: FORMS FOR BATCH EDITING ═══
 with st.expander("📦 Agrupación de Productos (por país)",expanded=False):
     for pn,cd in CD.items():
         if "PRODUCTO" not in cd["df"].columns: continue
-        st.markdown(f"**{PAISES[pn]['flag']} {pn}** — Solo productos de este país")
-        # Only products from THIS country's file
+        st.markdown(f"**{PAISES[pn]['flag']} {pn}**")
         country_prods=sorted(cd["df"]["PRODUCTO"].dropna().unique())
         sv=PM.get(pn,{});rows=[]
         for gn,ms_ in sv.items():
@@ -462,19 +431,20 @@ with st.expander("📦 Agrupación de Productos (por país)",expanded=False):
                     rows.append({"Original":m,"Grupo":gn})
         if not rows:
             for p in country_prods: rows.append({"Original":p,"Grupo":extraer_base(p)})
-        epg=st.data_editor(pd.DataFrame(rows),use_container_width=True,hide_index=True,key=f"pg_{pn}",num_rows="dynamic")
-        if st.button(f"💾 Guardar {pn}",key=f"spg_{pn}"):
-            ng=defaultdict(list)
-            for _,r in epg.iterrows():
-                o=str(r.get("Original","")).strip();g=str(r.get("Grupo","")).strip()
-                if o and g: ng[g].append(o)
-            PM[pn]=dict(ng);save_mappings(PM);st.success(f"✅ {pn}");st.rerun()
+        
+        # FORM STARTS HERE
+        with st.form(key=f"form_pg_{pn}"):
+            epg=st.data_editor(pd.DataFrame(rows),use_container_width=True,hide_index=True,key=f"pg_{pn}",num_rows="dynamic")
+            if st.form_submit_button(f"💾 Guardar Cambios {pn}"):
+                ng=defaultdict(list)
+                for _,r in epg.iterrows():
+                    o=str(r.get("Original","")).strip();g=str(r.get("Grupo","")).strip()
+                    if o and g: ng[g].append(o)
+                PM[pn]=dict(ng);save_mappings(PM);st.success(f"✅ Guardado");st.rerun()
 
-# ═══ FIX #1,#2: REVERSE Campaign Mapping (Product → Campaigns) ═══
-cm_saved=load_camp_map()  # Structure: {"product_name": ["camp1","camp2",...]}
+cm_saved=load_camp_map()
 if not all_camps.empty:
     with st.expander("🔗 Mapeo Campañas → Productos (Producto primero)",expanded=False):
-        # Gather products PER COUNTRY
         products_by_country={}
         all_prods_flat=[]
         for pn2,cd2 in CD.items():
@@ -486,86 +456,68 @@ if not all_camps.empty:
                     label=f"{PAISES[pn2]['flag']} {p}"
                     if label not in all_prods_flat: all_prods_flat.append(label)
 
-        # Only campaigns with spend > 0
         cn=sorted(all_camps["campaign_name"].unique().tolist())
         camp_spend={c:all_camps[all_camps["campaign_name"]==c]["spend"].sum() for c in cn}
-        # Add country detection for each campaign
         camp_countries={c:parse_campaign_country(c) for c in cn}
-
-        # Count assigned
         all_assigned=set()
-        for prod,camps in cm_saved.items():
-            all_assigned.update(camps)
+        for prod,camps in cm_saved.items(): all_assigned.update(camps)
 
-        st.markdown(f"**{len(cn)}** campañas con gasto · **{len(all_prods_flat)}** productos · **{len(all_assigned)}** ya asignadas")
+        st.markdown(f"**{len(cn)}** campañas con gasto · **{len(all_prods_flat)}** productos")
 
-        # FIX #1: AI auto-map with country awareness
         ac1,ac2=st.columns([1,2])
         with ac1:
             if st.button("🪄 Auto-Mapear con IA",key="ai_m"):
                 if oai_key:
                     camps_info=[{"name":c,"spend":camp_spend[c],"country":camp_countries.get(c,"Unknown")} for c in cn if c not in all_assigned]
-                    with st.spinner(f"Mapeando {len(camps_info)} campañas con IA..."):
+                    with st.spinner(f"Mapeando {len(camps_info)} campañas..."):
                         result=ai_map_with_country(camps_info,products_by_country,oai_key)
                     if result:
-                        # result: {campaign: product} → invert to {product: [campaigns]}
                         for camp,prod in result.items():
                             if prod not in cm_saved: cm_saved[prod]=[]
                             if camp not in cm_saved[prod]: cm_saved[prod].append(camp)
                         save_camp_map(cm_saved);st.success(f"✅ {len(result)} mapeadas");st.rerun()
                 else: st.warning("Ingresa OpenAI Key en sidebar")
-        with ac2:
-            st.caption("La IA usa [PAÍS] - PRODUCTO - [FECHA] para emparejar por país")
-
+        
         st.divider()
 
-        # FIX #1,#2: Show PRODUCTS first, then select campaigns for each
-        # Use session state as temp buffer — only save on button click
-        if "camp_draft" not in st.session_state:
-            st.session_state["camp_draft"]=dict(cm_saved)
+        # FORM FOR CAMPAIGN MAPPING
+        if "camp_draft" not in st.session_state: st.session_state["camp_draft"]=dict(cm_saved)
+        
+        with st.form(key="form_camp_map"):
+            for prod_label in all_prods_flat:
+                prod_name=prod_label.split(" ",1)[1] if " " in prod_label else prod_label
+                currently_assigned=st.session_state["camp_draft"].get(prod_name,[])
+                other_assigned=set()
+                for p2,cs2 in st.session_state["camp_draft"].items():
+                    if p2!=prod_name: other_assigned.update(cs2)
+                available=[c for c in cn if c not in other_assigned]
+                
+                # Show all currently assigned + available ones
+                # To make multiselect work in form, we need to pre-calculate options
+                # Options = Currently Assigned to THIS product + All Unassigned
+                
+                # Filter logic inside form is hard without rerun. We show all available + current.
+                # A user can deselect from here or select from available.
+                
+                options = sorted(list(set(currently_assigned + available)))
+                options_display = [f"{c} (${camp_spend.get(c,0):,.0f})" for c in options]
+                options_map = {f"{c} (${camp_spend.get(c,0):,.0f})":c for c in options}
+                default_display = [f"{c} (${camp_spend.get(c,0):,.0f})" for c in currently_assigned if c in options]
+                
+                sel = st.multiselect(f"📦 {prod_label}", options_display, default=default_display)
+                st.session_state["camp_draft"][prod_name] = [options_map[s] for s in sel]
+            
+            if st.form_submit_button("💾 Guardar Todo el Mapeo"):
+                cm_saved=dict(st.session_state["camp_draft"])
+                save_camp_map(cm_saved)
+                st.success("✅ Mapeo guardado")
+                st.rerun()
 
-        search=st.text_input("🔍 Buscar campaña",key="camp_search",placeholder="Filtrar campañas por nombre...")
-
-        for prod_label in all_prods_flat:
-            # Extract actual product name (remove flag)
-            prod_name=prod_label.split(" ",1)[1] if " " in prod_label else prod_label
-            currently_assigned=st.session_state["camp_draft"].get(prod_name,[])
-
-            # Filter available campaigns (not yet assigned to OTHER products)
-            other_assigned=set()
-            for p2,cs2 in st.session_state["camp_draft"].items():
-                if p2!=prod_name: other_assigned.update(cs2)
-
-            available=[c for c in cn if c not in other_assigned]
-            if search:
-                filtered=[c for c in available if search.upper() in c.upper()]
-            else:
-                filtered=available
-
-            # Show with spend info
-            options_display=[f"{c} (${camp_spend.get(c,0):,.0f})" for c in filtered]
-            options_map={f"{c} (${camp_spend.get(c,0):,.0f})":c for c in filtered}
-
-            # Default: currently assigned ones that are in filtered
-            default_display=[f"{c} (${camp_spend.get(c,0):,.0f})" for c in currently_assigned if c in filtered]
-
-            selected=st.multiselect(f"📦 {prod_label}",options_display,default=default_display,key=f"rmp_{prod_name}")
-            st.session_state["camp_draft"][prod_name]=[options_map[s] for s in selected if s in options_map]
-
-        st.divider()
-        # FIX #1: Only save when clicking button
-        if st.button("💾 Guardar Mapeo de Campañas",key="save_camp",type="primary"):
-            cm_saved=dict(st.session_state["camp_draft"])
-            save_camp_map(cm_saved)
-            st.success("✅ Mapeo guardado")
-            st.rerun()
-
-    # Build gxp from saved mapping: {product_upper: spend_in_COP}
+    # Rebuild gxp
     for prod,camps in cm_saved.items():
         total_spend_cop=sum(camp_spend.get(c,0) for c in camps if c in camp_spend) if not all_camps.empty else 0
         if total_spend_cop>0: gxp[prod.upper()]=total_spend_cop
 
-    # Also build per-country gxp (convert COP to local currency)
     for pn2 in CD:
         mon2=PAISES[pn2]["moneda"]
         gxp_by_country[pn2]={}
@@ -629,7 +581,6 @@ with tabs[1]:
             od=dpnc["ID"].nunique() if F.get("ID") else len(dpnc);uds=dp["CANTIDAD"].sum() if F.get("CANTIDAD") else 0
             pp=dp["PRECIO PROVEEDOR"].mean() if F.get("PRECIO PROVEEDOR") else 0;fp=dp["PRECIO FLETE"].mean() if F.get("PRECIO FLETE") else 0
             oe=od*gdg/100;odv=od-oe;ue=uds*gdg/100;cp=ue*pp;fl=oe*fp+odv*fp*grb
-            # FIX #4: Ads per product in LOCAL currency, then convert to COP
             ap_local=gxp_by_country.get(pn,{}).get(prod.upper(),0)
             ip=oe*ixo;ut=ip-cp-fl-ap_local
             gp_rows.append({"País":f"{PAISES[pn]['flag']} {pn}","Producto":prod,"Órdenes":int(od),"Ingreso_COP":to_cop(ip,mon,trm),"Utilidad_COP":to_cop(ut,mon,trm)})
@@ -648,7 +599,6 @@ for idx,(pn,cd) in enumerate(CD.items()):
     with tabs[idx+2]:
         k=cd["kpis"];df_ord=cd["df_ord"];df_f=cd["df"];F=cd["F"];pi=PAISES[pn];gc=gcol_of(cd);mon=PAISES[pn]["moneda"]
         prods=sorted(df_f[gc].dropna().unique()) if gc else []
-        # Per-country ads in local currency
         local_gxp=gxp_by_country.get(pn,{})
         ct1,ct2,ct3,ct4=st.tabs(["🌡 Termómetro","📊 Proyecciones","💰 Operación","📋 Órdenes"])
 
@@ -692,7 +642,7 @@ for idx,(pn,cd) in enumerate(CD.items()):
                     nv_=len(dp[dp["ESTATUS"].apply(lambda s:ms(s,STATUS_DEV))]) if F.get("ESTATUS") else 0
                     nnc_=np_-nc_;ap_=local_gxp.get(prod.upper(),0)
                     pr.append({"Producto":prod,"Pedidos":np_,"Facturado":fp_,"Ent":ne_,"Can":nc_,"Tra":nt_,"Dev":nv_,"Ads":ap_,
-                              "%Ent":f"{(ne_/nnc_*100):.0f}%" if nnc_ else "-","%Can":f"{(nc_/np_*100):.0f}%" if np_ else "-","%Tra":f"{(nt_/nnc_*100):.0f}%" if nnc_ else "-","%Dev":f"{(nv_/nnc_*100):.0f}%" if nnc_ else "-"})
+                               "%Ent":f"{(ne_/nnc_*100):.0f}%" if nnc_ else "-","%Can":f"{(nc_/np_*100):.0f}%" if np_ else "-","%Tra":f"{(nt_/nnc_*100):.0f}%" if nnc_ else "-","%Dev":f"{(nv_/nnc_*100):.0f}%" if nnc_ else "-"})
                 if pr:
                     dfpr=pd.DataFrame(pr);sc_={"Facturado":"Facturado","Pedidos":"Pedidos","Ads":"Ads","Entregados":"Ent"}[sb];dfpr=dfpr.sort_values(sc_,ascending=False)
                     h="<tr>"+"".join(f"<th>{c}</th>" for c in ["Producto","Ped","Facturado","Ent","%Ent","Can","%Can","Trá","%Trá","Dev","%Dev","Ads"])+"</tr>";rb=""
@@ -825,4 +775,4 @@ with tabs[-1]:
     else: st.info("Mapea campañas → productos.")
 
 st.divider()
-st.markdown(f'<div style="text-align:center;color:#475569;font-size:.75rem">Dashboard v5.1 · {sum(1 for p in PAISES if st.session_state.get(f"_b_{p}"))} países · {f_ini.strftime("%d/%m")} – {f_fin.strftime("%d/%m/%Y")}</div>',unsafe_allow_html=True)
+st.markdown(f'<div style="text-align:center;color:#475569;font-size:.75rem">Dashboard v5.2 · {sum(1 for p in PAISES if st.session_state.get(f"_b_{p}"))} países · {f_ini.strftime("%d/%m")} – {f_fin.strftime("%d/%m/%Y")}</div>',unsafe_allow_html=True)
