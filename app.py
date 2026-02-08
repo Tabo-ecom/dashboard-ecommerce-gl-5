@@ -1,6 +1,6 @@
 """
-Ecommerce Profit Dashboard v5.5
-Fix: Upload Multiple Files at Start + Cyclic Mapping Logic (Link/Unlink)
+Ecommerce Profit Dashboard v5.4
+Fix: Auto-grouping low volume products (TESTEO) + Campaign freeing logic
 """
 import streamlit as st
 import pandas as pd
@@ -23,7 +23,7 @@ except ImportError:
 # -----------------------------------------------------------------------------
 # ⚙️ CONFIGURATION
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="T-PILOT v5.5", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="T-PILOT v5.4", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
 
 PAISES = {
     "Colombia":  {"flag": "🇨🇴", "moneda": "COP", "sym": "$", "iso": "CO"},
@@ -46,20 +46,28 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 .stApp { background:#0B0F19; color:#E2E8F0; font-family:'Inter',sans-serif; }
-.kcard { background: linear-gradient(180deg, #131A2B, #0F1420); border: 1px solid #1E293B; border-radius: 12px; padding: 1.2rem; margin-bottom: 1rem; }
+/* Cards */
+.kcard {
+    background: linear-gradient(180deg, #131A2B, #0F1420);
+    border: 1px solid #1E293B; border-radius: 12px; padding: 1.2rem;
+    position: relative; transition: all 0.2s; margin-bottom: 1rem;
+}
 .kcard:hover { border-color: #3B82F6; }
-.kcard .lbl { font-size: 0.75rem; color: #94A3B8; font-weight: 600; text-transform: uppercase; }
-.kcard .val { font-family: 'JetBrains Mono'; font-size: 1.5rem; font-weight: 700; margin: 4px 0; }
+.kcard .lbl { font-size: 0.75rem; color: #94A3B8; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.kcard .val { font-family: 'JetBrains Mono', monospace; font-size: 1.5rem; font-weight: 700; margin: 4px 0; }
 .kcard .sub { font-size: 0.8rem; color: #64748B; display: flex; justify-content: space-between; }
 .kcard .pct { font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+/* Pills */
 .pill { padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; border: 1px solid; }
 .p-ent { background: #064E3B; border-color: #059669; color: #34D399; }
 .p-can { background: #450A0A; border-color: #DC2626; color: #F87171; }
 .p-tra { background: #1E3A8A; border-color: #2563EB; color: #60A5FA; }
 .p-dev { background: #431407; border-color: #D97706; color: #FBBF24; }
 .p-pen { background: #1E293B; border-color: #475569; color: #94A3B8; }
+/* Inputs Override */
 div[data-testid="stSelectbox"] > div > div { background-color: #1E293B; color: white; border: 1px solid #334155; }
 div[data-testid="stTextInput"] > div > div { background-color: #1E293B; color: white; }
+div[data-testid="stNumberInput"] > div > div { background-color: #1E293B; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -148,28 +156,8 @@ def ia_auto_map(api_key, campaigns, products):
         return {}
 
 # -----------------------------------------------------------------------------
-# 📡 DATA LOADERS & AUTO-DETECT
+# 📡 DATA LOADERS
 # -----------------------------------------------------------------------------
-def detect_country(df):
-    cols = df.columns.str.upper()
-    if "CIUDAD DESTINO" in cols or "CIUDAD" in cols:
-        col_city = "CIUDAD DESTINO" if "CIUDAD DESTINO" in cols else "CIUDAD"
-        cities = set(df[col_city].dropna().astype(str).str.upper().unique())
-        
-        # Keywords
-        co = {"BOGOTA", "MEDELLIN", "CALI", "BARRANQUILLA"}
-        ec = {"QUITO", "GUAYAQUIL", "CUENCA", "AMBATO"}
-        gt = {"GUATEMALA", "MIXCO", "VILLA NUEVA", "QUETZALTENANGO"}
-        
-        score_co = len(cities.intersection(co))
-        score_ec = len(cities.intersection(ec))
-        score_gt = len(cities.intersection(gt))
-        
-        if score_co > score_ec and score_co > score_gt: return "Colombia"
-        if score_ec > score_co and score_ec > score_gt: return "Ecuador"
-        if score_gt > score_co and score_gt > score_ec: return "Guatemala"
-    return None
-
 @st.cache_data
 def cargar_archivo(file_bytes, ext):
     import io
@@ -261,6 +249,7 @@ def process_data(df, start, end, country_name, g_fb_total, g_tt_total, campaign_
     n_tot = len(df_ord)
     n_otr = n_tot - n_ent - n_can - n_dev - n_tra - n_nov
     
+    # Financials
     df_ent = df_ord[df_ord["ESTATUS"].astype(str).str.upper().str.contains("ENTREGADO")].copy()
     ing_ent = df_ent["TOTAL DE LA ORDEN"].sum()
     costo_prod_ent = (df_ent["PRECIO PROVEEDOR"] * df_ent["CANTIDAD"]).sum()
@@ -276,8 +265,10 @@ def process_data(df, start, end, country_name, g_fb_total, g_tt_total, campaign_
     gasto_ads = g_fb_total + g_tt_total
     utilidad_real = ing_ent - costo_prod_ent - flete_ent - flete_dev - flete_tra - gasto_ads
     
+    # Product Summary (Grouped)
     prod_summary = []
     gcol = "GRUPO_PRODUCTO" if "GRUPO_PRODUCTO" in df_ord.columns else "PRODUCTO"
+    
     if gcol in df_ord.columns:
         for prod, sub in df_ord.groupby(gcol):
             fact = sub[sub["ESTATUS"].astype(str).str.upper().str.contains("ENTREGADO", na=False)]["TOTAL DE LA ORDEN"].sum()
@@ -296,12 +287,7 @@ def process_data(df, start, end, country_name, g_fb_total, g_tt_total, campaign_
     }
 
 # -----------------------------------------------------------------------------
-# 💾 SESSION STATE INIT
-# -----------------------------------------------------------------------------
-if "files_data" not in st.session_state: st.session_state.files_data = {}
-
-# -----------------------------------------------------------------------------
-# 🖥️ SIDEBAR
+# 🖥️ SIDEBAR & SETUP
 # -----------------------------------------------------------------------------
 cfg = load_cfg()
 PM = load_mappings()
@@ -323,60 +309,17 @@ with st.sidebar:
     sel_acc_ids = [fb_map[n] for n in sel_acc_names]
     
     st.divider()
-    # Sidebar Uploaders (Always visible for adding more)
-    st.markdown("### 📂 Archivos Cargados")
+    st.markdown("### 📂 Archivos")
+    uploaded_data = {}
     for p, meta in PAISES.items():
-        if p in st.session_state.files_data:
-            st.caption(f"✅ {meta['flag']} {p} (Cargado)")
-            if st.button(f"🗑️ Borrar {p}", key=f"del_{p}"):
-                del st.session_state.files_data[p]
-                st.rerun()
-    
-    st.markdown("---")
-    st.markdown("#### Añadir Archivo")
-    f_side = st.file_uploader("Subir archivo adicional", type=["csv","xlsx"], key="up_side")
-    if f_side:
-        df = cargar_archivo(f_side.getvalue(), f_side.name.split('.')[-1])
-        if not df.empty:
-            det = detect_country(df)
-            if det:
-                st.session_state.files_data[det] = df
-                st.success(f"Detectado: {det}")
-                st.rerun()
-            else:
-                st.error("No se pudo detectar el país.")
-
-# -----------------------------------------------------------------------------
-# 🚀 LANDING PAGE (IF NO DATA)
-# -----------------------------------------------------------------------------
-if not st.session_state.files_data:
-    st.title("✈️ T-PILOT DASHBOARD")
-    st.markdown("#### 📂 Carga Inicial")
-    st.info("Arrastra tus archivos de Dropi aquí. El sistema detectará el país automáticamente.")
-    
-    # Large Multi-Uploader
-    files = st.file_uploader("Arrastra aquí tus archivos (Colombia, Ecuador, Guatemala)", type=["csv", "xlsx"], accept_multiple_files=True, key="up_main")
-    
-    if files:
-        for f in files:
+        f = st.file_uploader(f"{meta['flag']} {p}", type=["csv","xlsx"], key=f"up_{p}")
+        if f:
             df = cargar_archivo(f.getvalue(), f.name.split('.')[-1])
-            if not df.empty:
-                det = detect_country(df)
-                if det:
-                    st.session_state.files_data[det] = df
-                else:
-                    st.warning(f"⚠️ Archivo '{f.name}' ignorado (País no detectado)")
-        if st.session_state.files_data:
-            st.success("✅ Archivos procesados. Cargando Dashboard...")
-            st.rerun()
-    
-    st.stop() # Stop execution here if no data
+            if not df.empty: uploaded_data[p] = df; st.success(f"{len(df)} pedidos")
 
 # -----------------------------------------------------------------------------
-# 📅 DASHBOARD HEADER
+# 📅 DATE & MAIN LAYOUT
 # -----------------------------------------------------------------------------
-uploaded_data = st.session_state.files_data
-
 c1, c2 = st.columns([2, 1])
 with c1: st.markdown("## ✈️ T-PILOT DASHBOARD")
 with c2:
@@ -393,7 +336,7 @@ if sel_acc_ids and fb_tok:
 else: df_ads_raw = pd.DataFrame(columns=["campaign_name", "spend", "account_id"])
 
 # -----------------------------------------------------------------------------
-# 🔗 MAPPING SYSTEM (Fix: Cyclic Logic)
+# 🔗 MAPPING SYSTEM (Fix: Free campaigns & Auto-Assign)
 # -----------------------------------------------------------------------------
 if not df_ads_raw.empty and uploaded_data:
     with st.expander("🔗 Mapeo de Campañas (IA + Manual)", expanded=False):
@@ -401,7 +344,8 @@ if not df_ads_raw.empty and uploaded_data:
         curr_map = load_json(CAMPAIGN_MAP_FILE)
         all_camps = sorted(df_ads_raw["campaign_name"].unique())
         
-        # KEY LOGIC: Unmapped = All - Mapped
+        # MAPPED: campaigns that are keys in curr_map
+        # UNMAPPED: all_camps minus keys in curr_map
         unmapped_camps = [c for c in all_camps if c not in curr_map]
         
         all_prods = set()
@@ -409,52 +353,39 @@ if not df_ads_raw.empty and uploaded_data:
             if "PRODUCTO" in df.columns: all_prods.update(df["PRODUCTO"].dropna().unique())
         all_prods_list = sorted(list(all_prods))
         
-        # 1. LINK SECTION
         c_m1, c_m2, c_m3 = st.columns([2, 2, 1])
         with c_m1: sel_camp = st.selectbox("Campaña FB (Sin asignar)", [""] + unmapped_camps)
         with c_m2: sel_prod = st.selectbox("Producto Dropi", [""] + all_prods_list)
         with c_m3:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🔗 Vincular") and sel_camp and sel_prod:
-                curr_map[sel_camp] = sel_prod
-                save_json(CAMPAIGN_MAP_FILE, curr_map)
-                st.success("Vinculado!")
-                st.rerun()
+                curr_map[sel_camp] = sel_prod; save_json(CAMPAIGN_MAP_FILE, curr_map); st.success("OK"); st.rerun()
         
-        # 2. AI AUTO
         if st.button("🪄 Auto-Mapear (IA)"):
             if not oa_key: st.error("Falta OpenAI Key")
             else:
                 with st.spinner("IA trabajando..."):
                     nm = ia_auto_map(oa_key, unmapped_camps, all_prods_list)
-                    if nm:
-                        curr_map.update(nm)
-                        save_json(CAMPAIGN_MAP_FILE, curr_map)
-                        st.success(f"IA vinculó {len(nm)} campañas!")
-                        st.rerun()
+                    if nm: curr_map.update(nm); save_json(CAMPAIGN_MAP_FILE, curr_map); st.rerun()
         
-        # 3. UNLINK SECTION
         if curr_map:
             st.markdown("##### Vínculos Activos")
             
-            # Simple list for unlinking
-            # We convert dict to list of strings "Campaign -> Product" for selectbox
-            map_list = [f"{k}  ➡️  {v}" for k,v in curr_map.items()]
+            # Show a delete button for each row is hard in st.dataframe, so we use a selectbox
+            df_map = pd.DataFrame(list(curr_map.items()), columns=["Campaña", "Producto"])
+            st.dataframe(df_map, use_container_width=True, height=200)
             
             c_del1, c_del2 = st.columns([3, 1])
             with c_del1:
-                to_unlink_str = st.selectbox("Selecciona para Desvincular (Liberar):", [""] + map_list)
+                to_unlink = st.selectbox("Selecciona para Desvincular (Liberar Campaña):", [""] + list(curr_map.keys()))
             with c_del2:
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("🗑️ Liberar"):
-                    if to_unlink_str:
-                        # Extract campaign name (part before separator)
-                        camp_to_free = to_unlink_str.split("  ➡️  ")[0]
-                        if camp_to_free in curr_map:
-                            del curr_map[camp_to_free]
-                            save_json(CAMPAIGN_MAP_FILE, curr_map)
-                            st.success("Liberada! Ahora aparece arriba.")
-                            st.rerun()
+                if st.button("🗑️ Borrar y Liberar"):
+                    if to_unlink in curr_map:
+                        del curr_map[to_unlink]
+                        save_json(CAMPAIGN_MAP_FILE, curr_map)
+                        st.success("Liberada!")
+                        st.rerun()
 
 df_ads_raw["Mapped_Product"] = df_ads_raw["campaign_name"].map(load_json(CAMPAIGN_MAP_FILE)).fillna("Otros")
 
@@ -469,11 +400,15 @@ if uploaded_data:
             st.markdown(f"**{PAISES[pn]['flag']} {pn}**")
             country_prods = sorted(df["PRODUCTO"].dropna().unique())
             sv = PM.get(pn, {})
+            
+            # Count orders for this country's df
             prod_counts = df["PRODUCTO"].value_counts()
             
             rows = []
+            # Pre-fill rows
             for p in country_prods:
                 current_group = ""
+                # Check if mapped previously
                 found = False
                 for gn, ors in sv.items():
                     if p.upper().strip() in [x.upper().strip() for x in ors]:
@@ -482,7 +417,9 @@ if uploaded_data:
                         break
                 
                 if not found:
-                    if prod_counts.get(p, 0) < 5:
+                    # Logic for auto-testeo
+                    count = prod_counts.get(p, 0)
+                    if count < 5:
                         current_group = f"TESTEO - {PAISES[pn]['iso']}"
                     else:
                         current_group = extraer_base(p)
@@ -499,15 +436,20 @@ if uploaded_data:
                         if o and g: ng[g].append(o)
                     PM[pn] = dict(ng); save_mappings(PM); st.success(f"✅ Guardado"); st.rerun()
 
-# Apply Mappings
+# Apply Mappings to DataFrames
 for pn, df in uploaded_data.items():
     if "PRODUCTO" in df.columns:
         sv = PM.get(pn, {})
+        # If no mapping saved yet, apply default base extraction to avoid errors
         uploaded_data[pn] = apply_groups(df, sv)
 
 # -----------------------------------------------------------------------------
 # 🖥️ DASHBOARD TABS
 # -----------------------------------------------------------------------------
+if not uploaded_data:
+    st.info("👋 Sube los archivos en la barra lateral para iniciar.")
+    st.stop()
+
 main_tabs = st.tabs(["🌎 Resumen Global"] + list(uploaded_data.keys()))
 
 # --- TAB RESUMEN GLOBAL ---
@@ -521,13 +463,28 @@ for i, pais in enumerate(uploaded_data.keys()):
         df = uploaded_data[pais]
         pi = PAISES[pais]
         
+        # Mapping Ads (Mapped Product -> Grouped Product is 1:1 usually, or we use Mapped Product directly)
+        # We need to match Ads Mapped Product to the DataFrame's GRUPO_PRODUCTO if grouped, or PRODUCTO
+        
+        # Ads logic:
+        # 1. Campaigns are mapped to "Raw Product Name" via Campaign Map.
+        # 2. Raw Product Names are grouped into "Groups" via Product Map.
+        # 3. We need to sum ads for the Group.
+        
+        # Get groups map for this country
         groups_map = PM.get(pais, {})
+        # Reverse group map: Raw -> Group
         raw_to_group = {}
         for g, raws in groups_map.items():
             for r in raws: raw_to_group[r] = g
             
+        # Apply group to ads dataframe
         df_ads_raw["Group_Assigned"] = df_ads_raw["Mapped_Product"].map(raw_to_group).fillna(df_ads_raw["Mapped_Product"])
+        
+        # Now filter ads for this country based on Groups present in the Data
         prods_in_data = df["GRUPO_PRODUCTO"].unique() if "GRUPO_PRODUCTO" in df.columns else df["PRODUCTO"].unique()
+        
+        # Filter ads where Group_Assigned is in prods_in_data
         df_ads_country = df_ads_raw[df_ads_raw["Group_Assigned"].isin(prods_in_data)]
         
         gasto_ads_cop = df_ads_country["spend"].sum()
@@ -600,6 +557,7 @@ for i, pais in enumerate(uploaded_data.keys()):
             st.divider()
             st.markdown("#### 📦 Detalle por Producto")
             if not df_prod.empty:
+                # Merge ads using Group Assigned
                 ads_by_group = df_ads_country.groupby("Group_Assigned")["spend"].sum().reset_index()
                 ads_by_group.columns = ["Producto", "Ads_COP"]
                 
@@ -615,4 +573,4 @@ for i, pais in enumerate(uploaded_data.keys()):
             if cols:
                 st.dataframe(df_ord[cols].sort_values("FECHA", ascending=False) if "FECHA" in cols else df_ord[cols], use_container_width=True)
 
-st.markdown("<br><center style='color:#475569'>T-PILOT v5.5 · Stable Version</center>", unsafe_allow_html=True)
+st.markdown("<br><center style='color:#475569'>T-PILOT v5.4 · Stable Version</center>", unsafe_allow_html=True)
