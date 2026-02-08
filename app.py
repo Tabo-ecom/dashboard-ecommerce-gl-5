@@ -1,7 +1,6 @@
 """
-Ecommerce Profit Dashboard v5.2
-Restored Layout (Sub-tabs) + Precise Math (v5) + AI Mapping
-Fix: Removed Matplotlib dependency
+Ecommerce Profit Dashboard v5.3
+Fix: Safe DataFrame display (evita caídas si faltan columnas)
 """
 import streamlit as st
 import pandas as pd
@@ -24,7 +23,7 @@ except ImportError:
 # -----------------------------------------------------------------------------
 # ⚙️ CONFIGURATION
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="T-PILOT v5.2", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="T-PILOT v5.3", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
 
 PAISES = {
     "Colombia":  {"flag": "🇨🇴", "moneda": "COP", "sym": "$"},
@@ -112,16 +111,6 @@ def fmt(v, p="Colombia"):
     sym = PAISES.get(p, PAISES["Colombia"])["sym"]
     return f"{sym} {v:,.0f}"
 
-def pl(**kw):
-    layout = dict(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color=C["text"], family="Inter"),
-        margin=dict(l=20, r=20, t=40, b=20),
-        xaxis=dict(gridcolor=C["grid"]), yaxis=dict(gridcolor=C["grid"])
-    )
-    layout.update(kw)
-    return layout
-
 def status_pill(s):
     s = str(s).upper()
     if "ENTREGADO" in s: return '<span class="pill p-ent">✅ Entregado</span>'
@@ -172,7 +161,7 @@ def cargar_archivo(file_bytes, ext):
             "PRECIO PROVEEDOR": ["PRECIO PROVEEDOR", "COSTO", "COST"],
             "PRECIO FLETE": ["PRECIO FLETE", "SHIPPING COST"],
             "COSTO DEVOLUCION FLETE": ["COSTO DEVOLUCION FLETE", "RETURN COST"],
-            "CIUDAD DESTINO": ["CIUDAD DESTINO", "CITY"],
+            "CIUDAD DESTINO": ["CIUDAD DESTINO", "CITY", "CIUDAD"],
             "GANANCIA": ["GANANCIA", "PROFIT"]
         }
         
@@ -213,7 +202,7 @@ def fb_get_spend(tok, accs, d1, d2):
     return pd.DataFrame(rows)
 
 # -----------------------------------------------------------------------------
-# 📊 CALCULATION ENGINE (v5 Logic)
+# 📊 CALCULATION ENGINE
 # -----------------------------------------------------------------------------
 def process_data(df, start, end, country_name, g_fb_total, g_tt_total, campaign_map):
     mask = (df["FECHA"] >= pd.Timestamp(start)) & (df["FECHA"] <= pd.Timestamp(end) + pd.Timedelta(days=1))
@@ -360,16 +349,14 @@ main_tabs = st.tabs(["🌎 Resumen Global"] + list(uploaded_data.keys()))
 # --- TAB RESUMEN GLOBAL ---
 with main_tabs[0]:
     st.markdown("### 🌎 Visión Global (Consolidado COP)")
-    # Logic to sum everything converted to COP... (Simplified for v5.2 to focus on countries)
     st.info("Selecciona un país específico para ver el detalle operativo completo.")
 
 # --- TABS PAÍSES ---
 for i, pais in enumerate(uploaded_data.keys()):
-    with main_tabs[i+1]: # +1 because 0 is Global
+    with main_tabs[i+1]:
         df = uploaded_data[pais]
         pi = PAISES[pais]
         
-        # Ads Calc
         prods_in_country = df["PRODUCTO"].unique() if "PRODUCTO" in df.columns else []
         df_ads_country = df_ads_raw[df_ads_raw["Mapped_Product"].isin(prods_in_country)]
         gasto_ads_local = convert_cop_to(df_ads_country["spend"].sum(), pi["moneda"])
@@ -379,7 +366,6 @@ for i, pais in enumerate(uploaded_data.keys()):
         if not data: st.warning("Sin datos."); continue
         k = data["kpis"]; df_ord = data["orders"]; df_prod = data["prod_summary"]
         
-        # --- SUB-TABS (RESTORED!) ---
         t1, t2, t3, t4 = st.tabs(["🌡 Termómetro", "📊 Proyecciones", "💰 Operación Real", "📋 Órdenes"])
         
         # 1. TERMÓMETRO
@@ -389,7 +375,6 @@ for i, pais in enumerate(uploaded_data.keys()):
             k2.markdown(f'<div class="kcard"><div class="lbl">FACTURADO BRUTO</div><div class="val c-white">{fmt(df_ord["TOTAL DE LA ORDEN"].sum(), pais)}</div></div>', unsafe_allow_html=True)
             k3.markdown(f'<div class="kcard"><div class="lbl">GASTO ADS</div><div class="val c-red">{fmt(k["ads"], pais)}</div></div>', unsafe_allow_html=True)
             
-            # Logística Visual
             st.markdown("#### Logística")
             l1, l2, l3, l4 = st.columns(4)
             l1.metric("✅ Entregado", f"{k['n_ent']} ({k['n_ent']/k['n_tot']*100:.0f}%)")
@@ -397,46 +382,28 @@ for i, pais in enumerate(uploaded_data.keys()):
             l3.metric("↩️ Devolución", f"{k['n_dev']} ({k['n_dev']/k['n_tot']*100:.0f}%)")
             l4.metric("❌ Cancelado", f"{k['n_can']} ({k['n_can']/k['n_tot']*100:.0f}%)")
 
-        # 2. PROYECCIONES (Restored Simulator)
+        # 2. PROYECCIONES
         with t2:
             st.markdown("#### 🔮 Simulador de Rentabilidad")
-            
-            # Simulator Logic
             if not df_prod.empty:
                 col_sim1, col_sim2 = st.columns(2)
                 with col_sim1: p_entrega = st.slider("Proyección % Entrega", 50, 100, 85, key=f"pe_{pais}")
                 with col_sim2: colchon = st.slider("Colchón Devolución", 1.0, 2.0, 1.4, 0.1, key=f"col_{pais}")
-                
-                # Merge logic for sim
                 df_sim = df_prod.copy()
                 df_sim["Pedidos_Proy"] = (df_sim["Pedidos"] * (p_entrega/100)).astype(int)
-                # Avg Ticket per product
                 df_sim["Ticket_Prom"] = df_sim["Facturado Entregado"] / df_sim["Entregados"].replace(0,1)
-                
-                # Proj Calcs
                 df_sim["Ingreso_Sim"] = df_sim["Pedidos_Proy"] * df_sim["Ticket_Prom"]
-                # Costo is tricky without per-unit cost, approximating from total cost
-                costo_unit = df_sim["Costo_Total"] / df_sim["Pedidos"] # Rough avg cost per order
-                df_sim["Costo_Sim"] = df_sim["Pedidos"] * costo_unit # Cost is sunk for dispatched items? Or just delivered? usually dispatched.
-                # Simplification for simulation:
-                # Utility = (Orders * %Ent * Ticket) - (Orders * CostProd) - Ads - Fletes
-                
                 st.dataframe(df_sim[["Producto", "Pedidos", "Ingreso_Sim"]], use_container_width=True)
-                st.info("ℹ️ Simulador básico restaurado. Ajusta los sliders arriba.")
 
-        # 3. OPERACIÓN REAL (The v5 Core)
+        # 3. OPERACIÓN REAL
         with t3:
             st.markdown(f"### {pi['flag']} Resultados Financieros")
-            
-            # Row 1
             r1, r2, r3 = st.columns(3)
-            r1.markdown(f'<div class="kcard"><div class="lbl">INGRESO REAL</div><div class="val c-green">{fmt(k["ing_ent"], pais)}</div><div class="sub">Cobrado de Entregas</div></div>', unsafe_allow_html=True)
+            r1.markdown(f'<div class="kcard"><div class="lbl">INGRESO REAL</div><div class="val c-green">{fmt(k["ing_ent"], pais)}</div></div>', unsafe_allow_html=True)
             util_c = "c-green" if k["utilidad"] > 0 else "c-red"
-            margin = (k["utilidad"]/k["ing_ent"]*100) if k["ing_ent"]>0 else 0
-            r2.markdown(f'<div class="kcard"><div class="lbl">UTILIDAD NETA</div><div class="val {util_c}">{fmt(k["utilidad"], pais)}</div><div class="sub">Margen: {margin:.1f}%</div></div>', unsafe_allow_html=True)
-            r3.markdown(f'<div class="kcard"><div class="lbl">ADS SPEND</div><div class="val c-red">{fmt(k["ads"], pais)}</div><div class="sub">Meta + TikTok</div></div>', unsafe_allow_html=True)
+            r2.markdown(f'<div class="kcard"><div class="lbl">UTILIDAD NETA</div><div class="val {util_c}">{fmt(k["utilidad"], pais)}</div></div>', unsafe_allow_html=True)
+            r3.markdown(f'<div class="kcard"><div class="lbl">ADS SPEND</div><div class="val c-red">{fmt(k["ads"], pais)}</div></div>', unsafe_allow_html=True)
 
-            st.markdown("#### 📉 Cascada de Costos")
             def row_fin(label, val, is_neg=True, icon="🔻"):
                 color = "#EF4444" if is_neg else "#10B981"
                 pct = (val / k["ing_ent"] * 100) if k["ing_ent"] > 0 else 0
@@ -466,13 +433,18 @@ for i, pais in enumerate(uploaded_data.keys()):
                 df_final = pd.merge(df_prod, ads_by_prod, on="Producto", how="left").fillna(0)
                 df_final["Gasto Ads"] = df_final["Ads_COP"].apply(lambda x: convert_cop_to(x, pi["moneda"]))
                 df_final["ROAS"] = df_final.apply(lambda x: x["Facturado Entregado"]/x["Gasto Ads"] if x["Gasto Ads"]>0 else 0, axis=1)
-                
-                # Tabla simple sin gradiente para evitar errores
                 st.dataframe(df_final[["Producto","Pedidos","Entregados","Facturado Entregado","Gasto Ads","ROAS"]], use_container_width=True)
 
-        # 4. ÓRDENES
+        # 4. ÓRDENES (SAFE MODE)
         with t4:
             st.markdown("#### 📋 Listado de Pedidos")
-            st.dataframe(df_ord[["ID","FECHA","ESTATUS","PRODUCTO","TOTAL DE LA ORDEN","CIUDAD DESTINO"]].sort_values("FECHA", ascending=False), use_container_width=True)
+            # Select only columns that actually exist
+            desired_cols = ["ID", "FECHA", "ESTATUS", "PRODUCTO", "TOTAL DE LA ORDEN", "CIUDAD DESTINO"]
+            available_cols = [c for c in desired_cols if c in df_ord.columns]
+            
+            if "FECHA" in available_cols:
+                st.dataframe(df_ord[available_cols].sort_values("FECHA", ascending=False), use_container_width=True)
+            else:
+                st.dataframe(df_ord[available_cols], use_container_width=True)
 
-st.markdown("<br><center style='color:#475569'>T-PILOT v5.2 · Stable Version</center>", unsafe_allow_html=True)
+st.markdown("<br><center style='color:#475569'>T-PILOT v5.3 · Stable Version</center>", unsafe_allow_html=True)
