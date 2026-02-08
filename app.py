@@ -1,6 +1,7 @@
 """
-Ecommerce Profit Dashboard v5.0
+Ecommerce Profit Dashboard v5.1
 Multi-Country · AI Mapping · Dark Finance · Precise Accounting
+Fix: Manejo de estado vacío (No Data)
 """
 import streamlit as st
 import pandas as pd
@@ -263,13 +264,6 @@ def process_data(df, start, end, country_name, g_fb_total, g_tt_total, campaign_
     
     if df.empty: return None
     
-    # 2. Assign Products based on Campaign Mapping (or raw name)
-    # We need to map ADS SPEND to PRODUCTS
-    # Logic: df (Orders) has "PRODUCTO". Ads data has "campaign_name".
-    # We need to distribute Ads Spend into Products.
-    
-    # 3. Aggregate Orders
-    # Group by Order ID to avoid duplicate totals if multiple lines per order
     agg_rules = {
         "TOTAL DE LA ORDEN": "first",
         "ESTATUS": "first",
@@ -277,80 +271,52 @@ def process_data(df, start, end, country_name, g_fb_total, g_tt_total, campaign_
         "COSTO DEVOLUCION FLETE": "first",
         "GANANCIA": "sum",
         "FECHA": "first",
-        "PRODUCTO": "first", # Simplified
+        "PRODUCTO": "first",
         "CANTIDAD": "sum",
         "PRECIO PROVEEDOR": "first"
     }
-    # Only use available columns
     agg_rules = {k:v for k,v in agg_rules.items() if k in df.columns}
     
     df_ord = df.groupby("ID").agg(agg_rules).reset_index() if "ID" in df.columns else df
     
-    # 4. Status Counters
+    # Status
     st_counts = df_ord["ESTATUS"].astype(str).str.upper().value_counts()
-    
     def get_cnt(keys):
         return sum(st_counts[k] for k in st_counts.keys() if any(x in k for x in keys))
     
     n_ent = get_cnt(["ENTREGADO"])
     n_can = get_cnt(["CANCELADO"])
     n_dev = get_cnt(["DEVOLUCION", "DEVOLUCIÓN"])
-    # Corrección Punto 2: Fletes Tránsito
     n_tra = get_cnt(["TRANSITO", "TRÁNSITO", "EN RUTA", "EN CAMINO", "DESPACHADO", "ENVIADO", "PROCESADO", "REPARTO"])
     n_nov = get_cnt(["NOVEDAD"])
     n_tot = len(df_ord)
     n_otr = n_tot - n_ent - n_can - n_dev - n_tra - n_nov
     
-    # 5. Financials (Corrección Punto 1)
-    
-    # Delivered Subset
+    # Financials
     df_ent = df_ord[df_ord["ESTATUS"].astype(str).str.upper().str.contains("ENTREGADO")].copy()
     
-    # Ingreso Real (Total Orden, no Ganancia)
     ing_ent = df_ent["TOTAL DE LA ORDEN"].sum()
-    
-    # Costos Directos de lo Entregado
     costo_prod_ent = (df_ent["PRECIO PROVEEDOR"] * df_ent["CANTIDAD"]).sum()
-    flete_ent = df_ent["PRECIO FLETE"].sum() # Flete de ida de lo entregado
+    flete_ent = df_ent["PRECIO FLETE"].sum()
     
-    # Costos Operativos Globales
-    # Fletes Devolución
     df_dev = df_ord[df_ord["ESTATUS"].astype(str).str.upper().str.contains("DEVOLU")]
     flete_dev = 0
     if not df_dev.empty:
-        # Some returns have specific return cost, others just regular freight
         if "COSTO DEVOLUCION FLETE" in df_dev.columns:
             flete_dev = df_dev[["PRECIO FLETE", "COSTO DEVOLUCION FLETE"]].max(axis=1).sum()
         else:
             flete_dev = df_dev["PRECIO FLETE"].sum()
             
-    # Fletes Tránsito (Pérdida potencial o costo hundido temporal)
-    # Corrección: Asegurar que sume
     transit_keys = ["TRANSITO", "TRÁNSITO", "EN RUTA", "EN CAMINO", "DESPACHADO", "ENVIADO", "PROCESADO", "REPARTO"]
     df_tra = df_ord[df_ord["ESTATUS"].astype(str).str.upper().str.contains("|".join(transit_keys))]
     flete_tra = df_tra["PRECIO FLETE"].sum()
     
-    # Ads Spend Distribution
-    # This assumes g_fb_total is already filtered/converted for this country
     gasto_ads = g_fb_total + g_tt_total
-    
-    # Utility Equation
     utilidad_real = ing_ent - costo_prod_ent - flete_ent - flete_dev - flete_tra - gasto_ads
     
-    # 6. Product Summary Data (Punto 6)
-    # Create a summary per product
+    # Product Summary
     prod_summary = []
     if "PRODUCTO" in df_ord.columns:
-        # Ads distribution per product logic requires Mapping.
-        # Simple Logic: Distribute Ads based on Orders % for now if map not precise, 
-        # OR use the Campaign Map if available.
-        
-        # Let's map spend first if we have Campaign Map
-        ads_per_prod = defaultdict(float)
-        # We need the raw campaigns df here ideally. 
-        # For this structure, we'll assume linear distribution of unmapped ads 
-        # or handle it in the UI section.
-        
         for prod, sub in df_ord.groupby("PRODUCTO"):
             n_o = len(sub)
             fact = sub[sub["ESTATUS"].str.contains("ENTREGADO", na=False)]["TOTAL DE LA ORDEN"].sum()
@@ -365,13 +331,8 @@ def process_data(df, start, end, country_name, g_fb_total, g_tt_total, campaign_
         "orders": df_ord,
         "kpis": {
             "n_tot": n_tot, "n_ent": n_ent, "n_can": n_can, "n_dev": n_dev, "n_tra": n_tra, "n_nov": n_nov, "n_otr": n_otr,
-            "ing_ent": ing_ent, 
-            "costo_prod": costo_prod_ent, 
-            "flete_ent": flete_ent, 
-            "flete_dev": flete_dev, 
-            "flete_tra": flete_tra,
-            "ads": gasto_ads,
-            "utilidad": utilidad_real
+            "ing_ent": ing_ent, "costo_prod": costo_prod_ent, "flete_ent": flete_ent, 
+            "flete_dev": flete_dev, "flete_tra": flete_tra, "ads": gasto_ads, "utilidad": utilidad_real
         },
         "prod_summary": pd.DataFrame(prod_summary)
     }
@@ -393,11 +354,10 @@ with st.sidebar:
             save_cfg("oa_key", oa_key)
             st.rerun()
             
-    # FB ACCOUNTS SELECTOR (Fix 7)
+    # FB ACCOUNTS SELECTOR
     fb_accounts = fb_get_accounts(fb_tok)
     fb_map = {f"{a['name']} ({a['account_id']})": a['account_id'] for a in fb_accounts}
     
-    # Select All Logic
     if "sel_all_fb" not in st.session_state: st.session_state.sel_all_fb = False
     
     def toggle_sel_all():
@@ -447,74 +407,62 @@ else:
     df_ads_raw = pd.DataFrame(columns=["campaign_name", "spend", "account_id"])
 
 # -----------------------------------------------------------------------------
-# 🔗 MAPPING SYSTEM (Fix 3 & 4)
+# 🔗 MAPPING SYSTEM
 # -----------------------------------------------------------------------------
 if not df_ads_raw.empty and uploaded_data:
     with st.expander("🔗 Mapeo de Productos (IA + Manual)", expanded=False):
         
-        # Load existing map
         curr_map = load_json(CAMPAIGN_MAP_FILE)
-        
-        # Get unique campaigns from Ads Data
         all_camps = sorted(df_ads_raw["campaign_name"].unique())
-        # Filter out already mapped
         unmapped_camps = [c for c in all_camps if c not in curr_map]
         
-        # Get unique products from Dropi Data
         all_prods = set()
         for df in uploaded_data.values():
             if "PRODUCTO" in df.columns:
                 all_prods.update(df["PRODUCTO"].dropna().unique())
         all_prods = sorted(list(all_prods))
         
-        # UI for Mapping
         c_m1, c_m2, c_m3 = st.columns([2, 2, 1])
-        with c_m1:
-            sel_camp = st.selectbox("Campaña FB (Sin asignar)", [""] + unmapped_camps)
-        with c_m2:
-            sel_prod = st.selectbox("Producto Dropi", [""] + all_prods)
+        with c_m1: sel_camp = st.selectbox("Campaña FB (Sin asignar)", [""] + unmapped_camps)
+        with c_m2: sel_prod = st.selectbox("Producto Dropi", [""] + all_prods)
         with c_m3:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🔗 Vincular"):
                 if sel_camp and sel_prod:
                     curr_map[sel_camp] = sel_prod
                     save_json(CAMPAIGN_MAP_FILE, curr_map)
-                    st.success("Vinculado!")
-                    st.rerun()
+                    st.success("Vinculado!"); st.rerun()
         
-        # AI Auto-Map
         if st.button("🪄 Auto-Mapear con IA"):
-            if not oa_key:
-                st.error("Falta la OpenAI Key en configuración")
+            if not oa_key: st.error("Falta OpenAI Key")
             else:
-                with st.spinner("La IA está analizando nombres..."):
+                with st.spinner("IA analizando..."):
                     new_maps = ia_auto_map(oa_key, unmapped_camps, all_prods)
                     if new_maps:
                         curr_map.update(new_maps)
                         save_json(CAMPAIGN_MAP_FILE, curr_map)
-                        st.success(f"IA vinculó {len(new_maps)} campañas!")
-                        st.rerun()
+                        st.success(f"IA vinculó {len(new_maps)} campañas!"); st.rerun()
         
-        # Show Mapped Table
         if curr_map:
             st.markdown("##### Vínculos Activos")
             df_map = pd.DataFrame(list(curr_map.items()), columns=["Campaña", "Producto Asignado"])
             st.dataframe(df_map, use_container_width=True, height=200)
-            
-            # Unlink option
             to_unlink = st.selectbox("Desvincular:", [""] + list(curr_map.keys()))
             if st.button("🗑️ Borrar Vínculo"):
                 if to_unlink in curr_map:
                     del curr_map[to_unlink]
-                    save_json(CAMPAIGN_MAP_FILE, curr_map)
-                    st.rerun()
+                    save_json(CAMPAIGN_MAP_FILE, curr_map); st.rerun()
 
-# Apply Map to Ads Data
 df_ads_raw["Mapped_Product"] = df_ads_raw["campaign_name"].map(load_json(CAMPAIGN_MAP_FILE)).fillna("Otros")
 
 # -----------------------------------------------------------------------------
 # 🖥️ DASHBOARD TABS
 # -----------------------------------------------------------------------------
+# FIX: Handle empty state to prevent StreamlitAPIException
+if not uploaded_data:
+    st.info("👋 Para comenzar, sube los archivos de Dropi en la barra lateral.")
+    st.stop()
+
 tabs = st.tabs(list(uploaded_data.keys()))
 
 for i, pais in enumerate(uploaded_data.keys()):
@@ -522,27 +470,11 @@ for i, pais in enumerate(uploaded_data.keys()):
         df = uploaded_data[pais]
         pi = PAISES[pais]
         
-        # Filter Ads for this country (Assuming Campaign Name contains Country Code or relying on manual mapping if complex)
-        # Simplified: We take total ads and assume user selected correct accounts for the context, 
-        # OR we can try to filter by currency/account logic. 
-        # For v5, let's take totals converted to Local Currency.
-        
-        # Calculate Ads Spend for this "View"
-        # Strategy: Sum spend of campaigns mapped to products present in this country's file
         prods_in_country = df["PRODUCTO"].unique() if "PRODUCTO" in df.columns else []
-        
-        # Filter ads that map to products in this country
         df_ads_country = df_ads_raw[df_ads_raw["Mapped_Product"].isin(prods_in_country)]
-        
-        # Spend is in Account Currency (usually COP). Convert to Country Currency.
-        # Assuming Ads Data comes in COP (standard for Latam accounts).
         gasto_ads_cop = df_ads_country["spend"].sum()
-        
-        # Add unmapped ads proportionally? (Optional, skipping for precision)
-        
         gasto_ads_local = convert_cop_to(gasto_ads_cop, pi["moneda"])
         
-        # PROCESS DATA
         data = process_data(df, date_start, date_end, pais, gasto_ads_local, 0, {})
         
         if not data:
@@ -551,10 +483,8 @@ for i, pais in enumerate(uploaded_data.keys()):
             
         k = data["kpis"]
         
-        # --- TERMÓMETRO ---
         st.markdown(f"### {pi['flag']} Operación Real ({pi['moneda']})")
         
-        # Top KPI Row
         k1, k2, k3, k4 = st.columns(4)
         k1.markdown(f'<div class="kcard"><div class="lbl">PEDIDOS TOTALES</div><div class="val c-white">{k["n_tot"]:,}</div><div class="sub">Entregados: {k["n_ent"]}</div></div>', unsafe_allow_html=True)
         k2.markdown(f'<div class="kcard"><div class="lbl">INGRESO ENTREGADO</div><div class="val c-green">{fmt(k["ing_ent"], pais)}</div><div class="sub">Facturación Real</div></div>', unsafe_allow_html=True)
@@ -564,7 +494,6 @@ for i, pais in enumerate(uploaded_data.keys()):
         margin = (k["utilidad"] / k["ing_ent"] * 100) if k["ing_ent"] > 0 else 0
         k4.markdown(f'<div class="kcard"><div class="lbl">UTILIDAD NETA</div><div class="val {util_color}">{fmt(k["utilidad"], pais)}</div><div class="sub">Margen Real: {margin:.1f}%</div></div>', unsafe_allow_html=True)
         
-        # --- CASCADA DE UTILIDAD (Fix 1 & 5) ---
         st.markdown("#### 📉 Desglose Financiero")
         
         def row_fin(label, val, is_neg=True, icon="🔻"):
@@ -598,28 +527,19 @@ for i, pais in enumerate(uploaded_data.keys()):
         
         st.divider()
         
-        # --- RESUMEN POR PRODUCTO (Fix 6) ---
         st.markdown("#### 📦 Rendimiento por Producto")
         
         df_prod = data["prod_summary"]
         if not df_prod.empty:
-            # Merge with Ads Data calculated before
-            # We aggregate ads spend by Mapped_Product from df_ads_country
             ads_by_prod = df_ads_country.groupby("Mapped_Product")["spend"].sum().reset_index()
-            # Rename for merge
             ads_by_prod.columns = ["Producto", "Ads_COP"]
             
-            # Merge
             df_final = pd.merge(df_prod, ads_by_prod, on="Producto", how="left").fillna(0)
-            
-            # Convert Ads to local currency
             df_final["Gasto Ads"] = df_final["Ads_COP"].apply(lambda x: convert_cop_to(x, pi["moneda"]))
             
-            # Calc KPIs
             df_final["CPA"] = df_final.apply(lambda x: x["Gasto Ads"] / x["Pedidos"] if x["Pedidos"] > 0 else 0, axis=1)
             df_final["ROAS"] = df_final.apply(lambda x: x["Facturado Entregado"] / x["Gasto Ads"] if x["Gasto Ads"] > 0 else 0, axis=1)
             
-            # Format
             st.dataframe(
                 df_final[["Producto", "Pedidos", "Entregados", "Facturado Entregado", "Gasto Ads", "CPA", "ROAS"]].style
                 .format({
@@ -634,4 +554,4 @@ for i, pais in enumerate(uploaded_data.keys()):
         else:
             st.info("No hay datos de productos.")
 
-st.markdown("<br><center style='color:#475569'>T-PILOT v5.0 · Powered by AI</center>", unsafe_allow_html=True)
+st.markdown("<br><center style='color:#475569'>T-PILOT v5.1 · Powered by AI</center>", unsafe_allow_html=True)
