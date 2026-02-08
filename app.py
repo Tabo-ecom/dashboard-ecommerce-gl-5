@@ -1,7 +1,7 @@
 """
-Ecommerce Profit Dashboard v6.0 Ultimate
-Premium UI (v5.2 visuals) + Robust Logic (v5.5 functionality)
-Multi-File Landing · Cyclic Mapping · Auto-Testeo Grouping · Advanced HTML Tables
+Ecommerce Profit Dashboard v6.1
+Fix: Syntax Error in Ads Logic
+Premium UI (v6 visuals) + Robust Logic (v5.5 functionality)
 """
 import streamlit as st
 import pandas as pd
@@ -32,19 +32,16 @@ STATUS_ENT=["ENTREGADO"]; STATUS_CAN=["CANCELADO"]; STATUS_DEV=["DEVOLUCION","DE
 STATUS_TRA=["TRANSITO","TRÁNSITO","EN RUTA","EN CAMINO","DESPACHADO","ENVIADO","PROCESADO","REPARTO"]
 
 # -----------------------------------------------------------------------------
-# 🎨 PREMIUM CSS STYLES (The "Pretty" Version)
+# 🎨 PREMIUM CSS STYLES
 # -----------------------------------------------------------------------------
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 .stApp { background:#0B0F19; color:#E2E8F0; font-family:'Inter',sans-serif; }
-/* Sidebar & Inputs */
 section[data-testid="stSidebar"] { background: linear-gradient(180deg, #0F1420, #080C14) !important; border-right: 1px solid #1E293B; }
 div[data-testid="stSelectbox"] > div > div, div[data-testid="stTextInput"] > div > div, div[data-testid="stNumberInput"] > div > div, .stDateInput > div > div > input { background-color: #1E293B !important; color: white !important; border: 1px solid #334155 !important; border-radius: 8px; }
-/* Tabs */
 .stTabs [data-baseweb="tab-list"] { background: #111827; border-radius: 12px; padding: 4px; border: 1px solid #1E293B; }
 .stTabs [data-baseweb="tab"] { border-radius: 8px; color: #64748B; font-weight: 600; }
 .stTabs [data-baseweb="tab"][aria-selected="true"] { background: #10B981; color: #0B0F19; }
-/* Cards */
 .kcard { background: linear-gradient(180deg, #131A2B, #0F1420); border: 1px solid #1E293B; border-radius: 16px; padding: 1.5rem; position: relative; transition: all 0.2s; overflow: hidden; }
 .kcard:hover { border-color: rgba(16,185,129,0.4); } .kcard.green { border-color: rgba(16,185,129,0.3); } .kcard.red { border-color: rgba(239,68,68,0.3); }
 .kcard .icon { position: absolute; top: 1.2rem; right: 1.2rem; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; opacity: 0.8; }
@@ -53,7 +50,6 @@ div[data-testid="stSelectbox"] > div > div, div[data-testid="stTextInput"] > div
 .kcard .val { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 1.8rem; }
 .val.green { color: #10B981; } .val.red { color: #EF4444; } .val.white { color: #F1F5F9; }
 .kcard .sub { font-size: 0.85rem; color: #94A3B8; margin-top: 4px; display: flex; gap: 8px; align-items: center; }
-/* Tables & Pills */
 .otbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.85rem; }
 .otbl th { text-align: left; padding: 12px 16px; color: #64748B; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; background: #111827; border-bottom: 1px solid #1E293B; }
 .otbl td { padding: 14px 16px; border-bottom: 1px solid rgba(15,20,32,0.8); color: #E2E8F0; vertical-align: middle; }
@@ -64,15 +60,12 @@ div[data-testid="stSelectbox"] > div > div, div[data-testid="stTextInput"] > div
 .p-tra { background: rgba(59,130,246,0.15); color: #3B82F6; border: 1px solid rgba(59,130,246,0.3); }
 .p-dev { background: rgba(245,158,11,0.15); color: #F59E0B; border: 1px solid rgba(245,158,11,0.3); }
 .p-pen { background: rgba(100,116,139,0.15); color: #94A3B8; border: 1px solid rgba(100,116,139,0.3); }
-/* Thermometer & Grids */
 .thermo { background: #111827; border: 1px solid #1E293B; border-radius: 16px; padding: 1.5rem; margin: 1rem 0; }
 .thermo .bar { height: 14px; border-radius: 7px; background: linear-gradient(90deg, #EF4444 0%, #F59E0B 50%, #10B981 100%); position: relative; margin: 12px 0; }
 .thermo .mk { position: absolute; top: -5px; width: 4px; height: 24px; background: #FFF; border-radius: 2px; box-shadow: 0 0 10px rgba(255,255,255,0.5); }
 .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1rem; }
-.row4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem; }
 .section-hdr { font-size: 1.1rem; font-weight: 700; color: #E2E8F0; margin: 2rem 0 1rem; display: flex; align-items: center; gap: 8px; }
 .section-hdr::before { content: ""; display: block; width: 4px; height: 18px; background: #10B981; border-radius: 2px; }
-/* Cascade */
 .cas-row { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid rgba(30,41,59,0.5); }
 .cas-lbl { width: 180px; font-size: 0.85rem; color: #94A3B8; display: flex; align-items: center; gap: 8px; }
 .cas-bar-wrap { flex: 1; height: 28px; background: rgba(15,20,32,0.5); border-radius: 6px; overflow: hidden; margin: 0 16px; }
@@ -185,7 +178,7 @@ def process_data(df, start, end, country_name, g_ads_local, campaign_map):
             ent=sub[sub["ESTATUS"].apply(lambda s:ms(s,STATUS_ENT))]
             psum.append({"Producto":p,"Pedidos":len(sub),"Facturado Entregado":ent["TOTAL DE LA ORDEN"].sum(),"Entregados":len(ent),"Costo_Total":(sub["PRECIO PROVEEDOR"]*sub["CANTIDAD"]).sum()})
 
-    return {"orders":df_ord,"kpis":{"n_tot":n_tot,"n_ent":n_ent,"ing_ent":ie,"costo_prod":cpe,"flete_ent":fe,"flete_dev":fd,"flete_tra":ft,"ads":g_ads_local,"utilidad":ur},"prod_summary":pd.DataFrame(psum)}
+    return {"orders":df_ord,"kpis":{"n_tot":n_tot,"n_ent":n_ent,"n_tra":n_tra,"n_dev":n_dev,"n_can":n_can,"ing_ent":ie,"costo_prod":cpe,"flete_ent":fe,"flete_dev":fd,"flete_tra":ft,"ads":g_ads_local,"utilidad":ur},"prod_summary":pd.DataFrame(psum)}
 
 # -----------------------------------------------------------------------------
 # 💾 STATE & SIDEBAR
@@ -298,12 +291,16 @@ for i,pn in enumerate(uploaded_data.keys()):
         df=uploaded_data[pn]; pi=PAISES[pn]
         cm=load_json(CAMPAIGN_MAP_FILE); gm=PM.get(pn,{})
         raw_to_group={r:g for g,rs in gm.items() for r in rs}
+        
+        # ADS LOGIC (Fixed Syntax)
         if not df_ads.empty:
             df_ads["Group"]=df_ads["campaign_name"].map(cm).map(raw_to_group).fillna(df_ads["campaign_name"].map(cm)).fillna("Otros")
             pid=df["GRUPO_PRODUCTO"].unique() if "GRUPO_PRODUCTO" in df.columns else df["PRODUCTO"].unique()
             ads_c=df_ads[df_ads["Group"].isin(pid)]
             g_ads=convert_cop_to(ads_c["spend"].sum(), pi["moneda"])
-        else: g_ads=0, ads_c=pd.DataFrame()
+        else:
+            g_ads = 0
+            ads_c = pd.DataFrame()
         
         data=process_data(df, ds, de, pn, g_ads, cm)
         if not data: st.warning("Sin datos en este rango."); continue
@@ -340,7 +337,7 @@ for i,pn in enumerate(uploaded_data.keys()):
             mx=k["ing_ent"]; rh=""
             for lb,v,pos in items:
                 bp=min(v/mx*100,100); bc=C["profit"] if pos else C["loss"]; sg="" if pos else "-"
-                rh+=f'<div class="cas-row"><div class="cas-lbl"><span style="color:{bc}">{"●" if pos else "🔻"}</span>{lb}</div><div class="cas-bar-wrap"><div style="width:{bp:.0f}%;height:100%;background:{bc}"></div></div>div class="cas-amt" style="color:{bc}">{sg}{fmt(v,pn)}</div><div class="cas-pct">{pof(v,mx)}</div></div>'
+                rh+=f'<div class="cas-row"><div class="cas-lbl"><span style="color:{bc}">{"●" if pos else "🔻"}</span>{lb}</div><div class="cas-bar-wrap"><div style="width:{bp:.0f}%;height:100%;background:{bc}"></div></div><div class="cas-amt" style="color:{bc}">{sg}{fmt(v,pn)}</div><div class="cas-pct">{pof(v,mx)}</div></div>'
             uc=C["profit"] if k["utilidad"]>0 else C["loss"]
             st.markdown(f'<div class="kcard" style="padding:1rem 2rem">{rh}<div style="border-top:2px solid #1E293B;margin:12px 0"></div><div class="cas-row" style="border:none"><div class="cas-lbl" style="font-weight:700;color:#F1F5F9;font-size:1rem">UTILIDAD FINAL</div><div style="flex:1"></div><div class="cas-amt" style="color:{uc};font-size:1.2rem">{fmt(k["utilidad"],pn)}</div><div class="cas-pct" style="color:{uc};font-weight:700">{pof(k["utilidad"],mx)}</div></div></div>',unsafe_allow_html=True)
 
@@ -379,4 +376,4 @@ for i,pn in enumerate(uploaded_data.keys()):
                 c2.markdown(f"<div style='text-align:center;padding-top:8px'>Página {pg+1} de {tot_p}</div>",unsafe_allow_html=True)
                 if c3.button("Siguiente →", disabled=pg==tot_p-1, key=f"b2_{pn}"): st.session_state[f"p_{pn}"]+=1; st.rerun()
 
-st.markdown("<br><center style='color:#64748B;font-size:0.8rem'>T-PILOT v6.0 Ultimate · Premium UI + Robust Logic</center>", unsafe_allow_html=True)
+st.markdown("<br><center style='color:#64748B;font-size:0.8rem'>T-PILOT v6.1 · Ultimate Visuals + Logic</center>", unsafe_allow_html=True)
