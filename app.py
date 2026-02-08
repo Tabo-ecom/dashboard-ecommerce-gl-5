@@ -1,7 +1,7 @@
 """
-Ecommerce Profit Dashboard v5.5
+Ecommerce Profit Dashboard v5.4
 Multi-Country · Dropi + Facebook + TikTok
-Fixes: Flete Dev logic, Transit scope, Logistics pie charts, P&L with logistics %, Utility charts, Manual ads improvements, Product mapping bug
+Fixed: Flete Dev, Transit scope, P&L logistics, Manual ads, Dashboard utilities
 """
 import streamlit as st, pandas as pd, io
 try:
@@ -25,12 +25,10 @@ STATUS_TRA_EXPLICIT=["EN TRANSITO","EN TRÁNSITO","EN ESPERA DE RUTA DOMESTICA",
 COUNTRY_ALIASES={"CO":"Colombia","COL":"Colombia","COLOMBIA":"Colombia","EC":"Ecuador","ECU":"Ecuador","ECUADOR":"Ecuador","GT":"Guatemala","GUA":"Guatemala","GUATEMALA":"Guatemala"}
 
 def mss(s,pats): return any(p in s.upper().strip() for p in pats)
-
 # FIX: "in transit" = everything NOT entregado, NOT cancelado/rechazado, NOT devolucion
 def is_transit(s):
     su=s.upper().strip()
     return not mss(su,STATUS_ENT) and not mss(su,STATUS_CAN) and not mss(su,STATUS_DEV)
-
 def pl(**kw):
     b=dict(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",font=dict(family="Inter,system-ui,sans-serif",color=C["text"],size=12),xaxis=dict(gridcolor=C["grid"],zerolinecolor=C["grid"]),yaxis=dict(gridcolor=C["grid"],zerolinecolor=C["grid"]),margin=dict(l=40,r=20,t=50,b=40),legend=dict(bgcolor="rgba(0,0,0,0)",font=dict(size=11,color=C["sub"])))
     b.update(kw);return b
@@ -237,7 +235,6 @@ def calc_projection(df,gc,F,pe_dict,rb,lgxp):
     rows=[]
     for prod in df[gc].dropna().unique():
         dp=df[df[gc]==prod]
-        if dp.empty: continue
         n_can=dp[dp["ESTATUS"].apply(lambda s:mss(s,STATUS_CAN))]["ID"].nunique() if F.get("ESTATUS") and F.get("ID") else 0
         n_ord=dp["ID"].nunique() if F.get("ID") else len(dp);n_nc=n_ord-n_can
         de=dp[dp["ESTATUS"].apply(lambda s:mss(s,STATUS_ENT))] if F.get("ESTATUS") else pd.DataFrame()
@@ -333,7 +330,7 @@ trm=get_trm();trm_usd=trm.get("COP_USD",4200);trm_gtq=trm.get("COP_GTQ",540)
 # ═══ SIDEBAR ═══
 cfg=load_cfg()
 with st.sidebar:
-    st.markdown("### 📊 Dashboard v5.5")
+    st.markdown("### 📊 Dashboard v5.4")
     st.divider()
     usar_api=st.checkbox("Usar APIs",value=True)
     fb_token="";fb_cids=[];tt_token="";tt_aids=[]
@@ -437,12 +434,11 @@ for pn in PAISES:
     CD[pn]={"df":df_f,"kpis":kpis,"F":F}
 if not CD: st.warning("Sin datos.");st.stop()
 
-# Product grouping - FIX #8: Bug DeltaGenerator
+# Product grouping
 with st.expander("📦 Productos",expanded=False):
     for pn,cd in CD.items():
         if "PRODUCTO" not in cd["df"].columns: continue
-        st.write(f"**{PAISES[pn]['flag']} {pn}**")  # FIX: usar st.write en lugar de st.markdown
-        cp=sorted(cd["df"]["PRODUCTO"].dropna().unique());sv=PM.get(pn,{})
+        st.markdown(f"**{PAISES[pn]['flag']} {pn}**");cp=sorted(cd["df"]["PRODUCTO"].dropna().unique());sv=PM.get(pn,{})
         cps=set(p.upper().strip() for p in cp);rows=[]
         for gn,ms_ in sv.items():
             for m in ms_:
@@ -457,7 +453,7 @@ with st.expander("📦 Productos",expanded=False):
                 if o and g: ng[g].append(o)
             PM[pn]=dict(ng);sj(MAPPING_FILE,PM);st.rerun()
 
-# Campaign mapping
+# Campaign mapping — FIX #8: no DeltaGenerator bug
 cm_saved=lj(CAMP_MAPPING_FILE)
 if not all_camps.empty:
     cn=sorted(all_camps["campaign_name"].unique().tolist())
@@ -523,134 +519,30 @@ if not all_camps.empty:
                 cv=gxp.get(prod.upper(),0)
                 if cv>0: gxp_local[pn2][prod.upper()]=cop_to(cv,PAISES[pn2]["moneda"],trm)
 
-# FIX #6: Manual ads per product per day - IMPROVED
+# FIX #6: Manual ads per product per day
 manual_ads=lj(MANUAL_ADS_FILE)
 with st.expander("📢 Publicidad Manual (por Producto/Día)",expanded=False):
-    st.markdown("**Agrega gasto diario por producto** (TikTok manual, Google, etc)")
-    
-    # Selector de país
+    st.markdown("Agrega gasto que no viene de APIs (ej: TikTok manual, Google, etc)")
     ma_pn=st.selectbox("País",list(CD.keys()),format_func=lambda x:f"{PAISES[x]['flag']} {x}",key="ma_pn")
     gc_ma="GRUPO_PRODUCTO" if "GRUPO_PRODUCTO" in CD[ma_pn]["df"].columns else ("PRODUCTO" if CD[ma_pn]["F"].get("PRODUCTO") else None)
-    
     if gc_ma:
-        prods_ma=[""] + sorted(CD[ma_pn]["df"][gc_ma].dropna().unique().tolist())
-        
-        # Cargar datos guardados
+        prods_ma=sorted(CD[ma_pn]["df"][gc_ma].dropna().unique().tolist())
         saved_rows=manual_ads.get(ma_pn,[])
-        
-        # Preparar DataFrame
-        if not saved_rows:
-            saved_rows=[{"Producto":"","Fecha":hoy.strftime("%Y-%m-%d"),"Monto":0.0}]
-        
-        df_ma=pd.DataFrame(saved_rows)
+        if not saved_rows: saved_rows=[{"Producto":prods_ma[0] if prods_ma else "","Fecha":hoy.strftime("%Y-%m-%d"),"Monto":0}]
+        ma_df=pd.DataFrame(saved_rows)
         for c in ["Producto","Fecha","Monto"]:
-            if c not in df_ma.columns:
-                if c == "Producto": df_ma[c]=""
-                elif c == "Fecha": df_ma[c]=hoy.strftime("%Y-%m-%d")
-                else: df_ma[c]=0.0
-        
-        # Editor mejorado
-        edited=st.data_editor(
-            df_ma,
-            column_config={
-                "Producto":st.column_config.SelectboxColumn(
-                    "Producto",
-                    options=prods_ma,
-                    required=True
-                ),
-                "Fecha":st.column_config.DateColumn(
-                    "Fecha",
-                    format="YYYY-MM-DD",
-                    required=True
-                ),
-                "Monto":st.column_config.NumberColumn(
-                    f"Monto ({PAISES[ma_pn]['moneda']})",
-                    min_value=0,
-                    step=100,
-                    format="%.2f",
-                    required=True
-                )
-            },
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=True,
-            key="ma_ed"
-        )
-        
-        col1, col2, col3 = st.columns([2,1,1])
-        with col1:
-            if st.button("💾 Guardar Ads Manual",key="ma_save",type="primary"):
-                # Limpiar filas vacías
-                clean_rows = []
-                for _, row in edited.iterrows():
-                    prod = str(row.get("Producto","")).strip()
-                    fecha = row.get("Fecha","")
-                    monto = float(row.get("Monto",0) or 0)
-                    
-                    if prod and fecha and monto > 0:
-                        # Convertir fecha a string si es necesario
-                        if isinstance(fecha, pd.Timestamp):
-                            fecha = fecha.strftime("%Y-%m-%d")
-                        clean_rows.append({
-                            "Producto": prod,
-                            "Fecha": str(fecha),
-                            "Monto": monto
-                        })
-                
-                manual_ads[ma_pn] = clean_rows
-                sj(MANUAL_ADS_FILE, manual_ads)
-                st.success(f"✅ Guardados {len(clean_rows)} registros")
-                st.rerun()
-        
-        with col2:
-            if st.button("🗑️ Limpiar Todo",key="ma_clear"):
-                manual_ads[ma_pn] = []
-                sj(MANUAL_ADS_FILE, manual_ads)
-                st.success("✅ Limpiado")
-                st.rerun()
-        
-        # Mostrar resumen
-        if saved_rows and len([r for r in saved_rows if r.get("Monto",0) > 0]) > 0:
-            st.divider()
-            st.caption("**📊 Resumen Actual:**")
-            total_manual = sum(float(r.get("Monto",0) or 0) for r in saved_rows)
-            prod_totals = {}
-            for r in saved_rows:
-                prod = r.get("Producto","")
-                monto = float(r.get("Monto",0) or 0)
-                if prod and monto > 0:
-                    prod_totals[prod] = prod_totals.get(prod, 0) + monto
-            
-            st.metric(f"Total {PAISES[ma_pn]['moneda']}", f"{total_manual:,.2f}")
-            if prod_totals:
-                for prod, total in sorted(prod_totals.items(), key=lambda x: -x[1]):
-                    st.caption(f"• {prod}: {PAISES[ma_pn]['sym']}{total:,.2f}")
-
-# Apply manual ads to gxp_local - filtrando por fecha
-for pn_m, rows_m in manual_ads.items():
-    if pn_m not in CD: continue
-    for row_m in rows_m:
-        pr_m = str(row_m.get("Producto","")).upper().strip()
-        mt = float(row_m.get("Monto",0) or 0)
-        fecha_m = row_m.get("Fecha","")
-        
-        # Convertir fecha_m a datetime para comparar
-        try:
-            if isinstance(fecha_m, str):
-                fecha_dt = pd.to_datetime(fecha_m).date()
-            elif isinstance(fecha_m, pd.Timestamp):
-                fecha_dt = fecha_m.date()
-            else:
-                continue
-            
-            # Solo agregar si la fecha está en el rango seleccionado
-            if f_ini <= fecha_dt <= f_fin and pr_m and mt > 0:
-                gxp_local.setdefault(pn_m, {})
-                gxp_local[pn_m][pr_m] = gxp_local[pn_m].get(pr_m, 0) + mt
-                cop_v = to_cop(mt, PAISES[pn_m]["moneda"], trm)
-                gxp[pr_m] = gxp.get(pr_m, 0) + cop_v
-        except:
-            continue
+            if c not in ma_df.columns: ma_df[c]=""
+        edited=st.data_editor(ma_df,column_config={"Producto":st.column_config.SelectboxColumn("Producto",options=prods_ma),"Fecha":st.column_config.TextColumn("Fecha (YYYY-MM-DD)"),"Monto":st.column_config.NumberColumn(f"Monto ({PAISES[ma_pn]['moneda']})",min_value=0,step=1000)},num_rows="dynamic",use_container_width=True,hide_index=True,key="ma_ed")
+        if st.button("💾 Guardar Ads Manual",key="ma_save"):
+            manual_ads[ma_pn]=edited.to_dict("records");sj(MANUAL_ADS_FILE,manual_ads);st.success("✅")
+    # Apply manual ads to gxp_local
+    for pn_m,rows_m in manual_ads.items():
+        if pn_m not in CD: continue
+        for row_m in rows_m:
+            pr_m=str(row_m.get("Producto","")).upper().strip();mt=float(row_m.get("Monto",0) or 0)
+            if pr_m and mt>0:
+                gxp_local.setdefault(pn_m,{});gxp_local[pn_m][pr_m]=gxp_local[pn_m].get(pr_m,0)+mt
+                cop_v=to_cop(mt,PAISES[pn_m]["moneda"],trm);gxp[pr_m]=gxp.get(pr_m,0)+cop_v
 
 # ═══ TABS ═══
 def gcol(cd): return "GRUPO_PRODUCTO" if "GRUPO_PRODUCTO" in cd["df"].columns else ("PRODUCTO" if cd["F"].get("PRODUCTO") else None)
@@ -663,8 +555,7 @@ with tabs[0]:
     to=sum(cd["kpis"]["n_ord"] for cd in CD.values());tf=sum(to_cop(cd["kpis"]["fact_neto"],PAISES[p]["moneda"],trm) for p,cd in CD.items())
     ta=sum(cd["kpis"].get("g_ads_cop",0) for cd in CD.values());tu=sum(to_cop(cd["kpis"]["u_real"],PAISES[p]["moneda"],trm) for p,cd in CD.items());tr2=tf/ta if ta>0 else 0
     st.markdown(f'<p class="section-hdr">Total (COP)</p><div class="row2 r4"><div class="kcard"><div class="icon w">📦</div><div class="lbl">ÓRDENES</div><div class="val lg white">{to:,}</div></div><div class="kcard green"><div class="icon g">📈</div><div class="lbl">FACTURADO</div><div class="val lg green">{fmt_cop(tf)}</div></div><div class="kcard red"><div class="icon r">🎯</div><div class="lbl">ADS</div><div class="val lg red">{fmt_cop(ta)}</div></div><div class="kcard {"green" if tu>=0 else "red"}"><div class="icon {"g" if tu>=0 else "r"}">💰</div><div class="lbl">UTILIDAD</div><div class="val lg {"green" if tu>=0 else "red"}">{fmt_cop(tu)}</div><div class="sub">ROAS:{tr2:.2f}x</div></div></div>',unsafe_allow_html=True)
-    
-    # FIX #4: Chart with Facturación + Órdenes + Utilidad Real + Utilidad Proyectada
+    # FIX #4: Chart with Facturación + Órdenes + Utilidad Real
     ad=[]
     for pn,cd in CD.items():
         df_=cd["df"];mon_=PAISES[pn]["moneda"]
@@ -675,17 +566,14 @@ with tabs[0]:
             de=g[g["ESTATUS"].apply(lambda s:mss(s,STATUS_ENT))]
             u_r=de["TOTAL DE LA ORDEN"].sum()-de.get("PRECIO PROVEEDOR X CANTIDAD",pd.Series([0])).sum()-de["PRECIO FLETE"].sum() if not de.empty and "PRECIO PROVEEDOR X CANTIDAD" in de.columns else 0
             ad.append({"Fecha":dt_date,"Fac":fac,"Ords":ords,"U_Real":to_cop(u_r,mon_,trm)})
-    
     if ad:
         dg=pd.DataFrame(ad).groupby("Fecha").sum().reset_index()
         fig=go.Figure()
         fig.add_trace(go.Bar(x=dg["Fecha"],y=dg["Ords"],name="Órdenes",marker_color=C["blue"],opacity=.5,yaxis="y2"))
         fig.add_trace(go.Scatter(x=dg["Fecha"],y=dg["Fac"],name="Facturación",line=dict(color=C["profit"],width=2.5),fill="tozeroy",fillcolor="rgba(16,185,129,0.08)"))
         fig.add_trace(go.Scatter(x=dg["Fecha"],y=dg["U_Real"],name="Utilidad Real",line=dict(color=C["purple"],width=2,dash="dot")))
-        # TODO: Agregar Utilidad Proyectada requiere cálculo más complejo por día
         fig.update_layout(**pl(title="FACTURACIÓN + ÓRDENES + UTILIDAD (COP)",yaxis2=dict(overlaying="y",side="right",gridcolor="rgba(0,0,0,0)")))
         st.plotly_chart(fig,use_container_width=True,key="gf")
-    
     st.divider()
     for pn,cd in CD.items():
         k=cd["kpis"];pi=PAISES[pn];uc="green" if k["u_real"]>=0 else "red"
@@ -742,12 +630,10 @@ for idx,(pn,cd) in enumerate(CD.items()):
         k=cd["kpis"];df_f=cd["df"];F=cd["F"];pi=PAISES[pn];gc_=gcol(cd);mon=PAISES[pn]["moneda"]
         prods=sorted(df_f[gc_].dropna().unique()) if gc_ else [];lgxp=gxp_local.get(pn,{})
         ct1,ct2,ct3,ct4=st.tabs(["🌡 Termómetro","📊 Proyecciones","💰 Operación","📋 Órdenes"])
-        
         with ct1:
             at=f'<span style="font-size:.65rem;color:#475569">({fmt_cop(k.get("g_ads_cop",0))} COP)</span>' if mon!="COP" else ""
             rc="green" if k["roas"]>=2 else ("red" if k["roas"]<1 else "white");tc="green" if k["tasa_ent"]>=60 else ("red" if k["tasa_ent"]<40 else "white")
             st.markdown(f'<div class="row2 r3"><div class="kcard"><div class="icon w">💰</div><div class="lbl">BRUTO</div><div class="val lg white">{fmt(k["fact_bruto"],pn)}</div><div class="sub">{k["n_ord"]:,} órdenes</div></div><div class="kcard green"><div class="icon g">📈</div><div class="lbl">NETO</div><div class="val lg green">{fmt(k["fact_neto"],pn)}</div></div><div class="kcard"><div class="icon w">🛒</div><div class="lbl">AOV</div><div class="val lg white">{fmt(k["aov"],pn)}</div></div></div><div class="row2 r3"><div class="kcard red"><div class="icon r">🎯</div><div class="lbl">ADS</div><div class="val lg red">{fmt(k["g_ads"],pn)}</div>{at}</div><div class="kcard"><div class="icon g">⚡</div><div class="lbl">ROAS</div><div class="val lg {rc}">{k["roas"]:.2f}x</div></div><div class="kcard"><div class="icon g">✅</div><div class="lbl">ENTREGA</div><div class="val lg {tc}">{k["tasa_ent"]:.0f}%</div></div></div>',unsafe_allow_html=True)
-            
             if gc_ and F.get("FECHA"):
                 pf=st.selectbox("Producto",["Todos"]+prods,key=f"pf_{pn}")
                 dch=df_f if pf=="Todos" else df_f[df_f[gc_]==pf]
@@ -761,14 +647,12 @@ for idx,(pn,cd) in enumerate(CD.items()):
                         edf=dch["ESTATUS"].value_counts().reset_index();edf.columns=["E","N"]
                         cm_={s:(C["profit"] if "ENTREGADO" in s else C["loss"] if mss(s,STATUS_CAN) else C["warn"] if mss(s,STATUS_DEV) else C["blue"]) for s in edf["E"]}
                         f3=px.pie(edf,names="E",values="N",hole=.55,color="E",color_discrete_map=cm_);f3.update_layout(**pl(showlegend=True,title="ESTADOS"));f3.update_traces(textinfo="percent");st.plotly_chart(f3,use_container_width=True,key=f"pi_{pn}")
-            
             st.markdown(render_logistics(f"{pi['flag']} {pn}",k,C),unsafe_allow_html=True)
             dc1,dc2,dc3,dc4=st.columns(4)
             with dc1: dl_log(df_f,F,"Entregados",STATUS_ENT,f"de2_{pn}")
             with dc2: dl_log(df_f,F,"Cancelados",STATUS_CAN,f"dc2_{pn}")
             with dc3: dl_log(df_f,F,"Tránsito",STATUS_TRA_EXPLICIT,f"dt2_{pn}")
             with dc4: dl_log(df_f,F,"Devolución",STATUS_DEV,f"dd2_{pn}")
-            
             # FIX #7: Product summary — %Can over total, %E/%T/%D over non-cancelled
             if gc_:
                 st.markdown('<p class="section-hdr">Resumen por Producto</p>',unsafe_allow_html=True)
@@ -789,7 +673,6 @@ for idx,(pn,cd) in enumerate(CD.items()):
                     for _,r in dfpr.iterrows():
                         rb+=f'<tr><td>{r["Producto"]}</td><td>{r["Pedidos"]}</td><td class="mono">{fmt(r["Facturado"],pn)}</td><td style="color:{C["profit"]}">{r["Ent"]}</td><td style="color:{C["profit"]}">{r["%E"]}</td><td style="color:{C["loss"]}">{r["Can"]}</td><td style="color:{C["loss"]}">{r["%C"]}</td><td style="color:{C["blue"]}">{r["Tra"]}</td><td style="color:{C["blue"]}">{r["%T"]}</td><td style="color:{C["warn"]}">{r["Dev"]}</td><td style="color:{C["warn"]}">{r["%D"]}</td><td class="mono" style="color:{C["loss"]}">{fmt(r["Ads"],pn)}</td></tr>'
                     st.markdown(f'<div class="kcard" style="padding:0;overflow-x:auto"><table class="otbl"><thead>{h}</thead><tbody>{rb}</tbody></table></div><p style="font-size:.7rem;color:{C["sub"]}">*%Can sobre total · %E/%T/%D sobre no-cancelados</p>',unsafe_allow_html=True)
-        
         # Projections
         with ct2:
             if not gc_: st.warning("Sin productos.")
@@ -822,14 +705,12 @@ for idx,(pn,cd) in enumerate(CD.items()):
                         ed=st.data_editor(dfp[["Producto","% Ent"]],column_config={"% Ent":st.column_config.NumberColumn("%",min_value=0,max_value=100,step=1,format="%d")},use_container_width=True,hide_index=True,key=f"pt_{pn}")
                         if ed is not None:
                             for _,r in ed.iterrows(): st.session_state[pek][r["Producto"]]=r["% Ent"]
-        
         # FIX #2: Operación con pie logístico
         with ct3:
             ir=k["ing_real"];cpr=k["cpr"];fe=k["fl_ent"];ga=k["g_ads"];fd=k["fl_dev"];ft_=k["fl_tra"];ur=k["u_real"];mg=(ur/ir*100) if ir>0 else 0;uc="green" if ur>=0 else "red"
             at2=f'<span style="font-size:.65rem;color:#475569">({fmt_cop(k.get("g_ads_cop",0))} COP)</span>' if mon!="COP" else ""
             st.markdown(f'<div class="kcard {uc}" style="padding:2rem;margin-bottom:1.5rem"><div class="icon {"g" if ur>=0 else "r"}" style="width:48px;height:48px;font-size:1.3rem">💰</div><div class="lbl">UTILIDAD REAL</div><div class="val xl {uc}">{fmt(ur,pn)}</div><div class="pct">Margen:{mg:.1f}%</div></div><div class="row2 r3"><div class="kcard green"><div class="icon g">✅</div><div class="lbl">INGRESO</div><div class="val md green">{fmt(ir,pn)}</div></div><div class="kcard red"><div class="icon r">📦</div><div class="lbl">COSTO</div><div class="val md red">-{fmt(cpr,pn)}</div><div class="pct">{pof(cpr,ir)}</div></div><div class="kcard red"><div class="icon r">🚚</div><div class="lbl">FL ENT</div><div class="val md red">-{fmt(fe,pn)}</div><div class="pct">{pof(fe,ir)}</div></div></div><div class="row2 r3"><div class="kcard red"><div class="icon r">🎯</div><div class="lbl">ADS</div><div class="val md red">-{fmt(ga,pn)}</div>{at2}<div class="pct">{pof(ga,ir)}</div></div><div class="kcard red"><div class="icon r">⚠️</div><div class="lbl">FL DEV</div><div class="val md red">-{fmt(fd,pn)}</div><div class="pct">{pof(fd,ir)}</div></div><div class="kcard"><div class="icon b">🚚</div><div class="lbl">FL TRÁ</div><div class="val md white">-{fmt(ft_,pn)}</div><div class="pct">{pof(ft_,ir)}</div></div></div>',unsafe_allow_html=True)
-            
-            # FIX #2: Pie charts - Agregando segundo pie logístico
+            # Pie charts
             op1,op2=st.columns(2)
             with op1:
                 ldat=[("Entregado",k["n_ent"],C["profit"]),("Can/Rech",k["n_can"],C["loss"]),("Devolución",k["n_dev"],C["warn"]),("Tránsito+",k["n_tra"],C["blue"])]
@@ -845,7 +726,6 @@ for idx,(pn,cd) in enumerate(CD.items()):
                     fp2=px.pie(cdf,names="Concepto",values="Monto",hole=.55,color="Concepto",color_discrete_map={l:c for l,_,c in cdat})
                     fp2.update_layout(**pl(title="COSTOS",showlegend=True));fp2.update_traces(textinfo="percent")
                     st.plotly_chart(fp2,use_container_width=True,key=f"cp_{pn}")
-            
             # Cascade
             cpf=st.selectbox("Cascada",["Todos"]+prods,key=f"cpf_{pn}") if gc_ else "Todos"
             c_ir,c_cpr,c_fe,c_ga,c_fd,c_ft=ir,cpr,fe,ga,fd,ft_
@@ -869,19 +749,17 @@ for idx,(pn,cd) in enumerate(CD.items()):
                 ch+=f'<div class="cas-row"><div class="cas-lbl">{lb}</div><div class="cas-bar-wrap"><div class="cas-bar" style="width:{bp:.0f}%;background:{bc}"></div></div><div class="cas-amt" style="color:{bc}">{sg}{fmt(vl,pn)}</div><div class="cas-pct">{pof(vl,c_ir)}</div></div>'
             up=min(abs(c_ur)/mx_c*100,100);ucol=C["profit"] if c_ur>=0 else C["loss"]
             st.markdown(f'<div class="kcard" style="padding:1rem 1.5rem">{ch}<div style="border-top:2px solid #1E293B;margin:8px 0"></div><div class="cas-row" style="border-bottom:none"><div class="cas-lbl" style="font-weight:700;color:#F1F5F9">UTILIDAD</div><div class="cas-bar-wrap"><div class="cas-bar" style="width:{up:.0f}%;background:{ucol}"></div></div><div class="cas-amt" style="color:{ucol}">{"" if c_ur>=0 else "-"}{fmt(abs(c_ur),pn)}</div><div class="cas-pct" style="color:{ucol}">{pof(abs(c_ur),c_ir)}</div></div></div>',unsafe_allow_html=True)
-            
             # FIX #5: P&L with logistics
             if gc_:
                 st.markdown('<p class="section-hdr">P&L por Producto</p>',unsafe_allow_html=True)
                 dpnl=product_pnl(df_f,gc_,F,lgxp)
                 if not dpnl.empty:
                     dpnl=dpnl.sort_values("Ingreso",ascending=False)
-                    h2="<tr>"+"".join(f"<th>{c}</th>" for c in ["Producto","Órd","Ent","%E","Can","%C*","Dev","%D","Trá","%T","Ingreso","Costo","FlE","FlD","FlT","Ads","Util","Mg"])+"</tr>";rb2=""
+                    h2="<tr>"+"".join(f"<th>{c}</th>" for c in ["Producto","Órd","Ent","%E","Can","%C","Dev","%D","Trá","%T","Ingreso","Costo","FlE","FlD","FlT","Ads","Util","Mg"])+"</tr>";rb2=""
                     for _,r in dpnl.iterrows():
                         utc=C["profit"] if r["Utilidad"]>=0 else C["loss"];mg2=pof(r["Utilidad"],r["Ingreso"])
                         rb2+=f'<tr><td>{r["Producto"]}</td><td>{r["Ord"]}</td><td style="color:{C["profit"]}">{r["Ent"]}</td><td style="color:{C["profit"]}">{r["pEnt"]}</td><td style="color:{C["loss"]}">{r["Can"]}</td><td style="color:{C["loss"]}">{r["pCan"]}</td><td style="color:{C["warn"]}">{r["Dev"]}</td><td style="color:{C["warn"]}">{r["pDev"]}</td><td style="color:{C["blue"]}">{r["Tra"]}</td><td style="color:{C["blue"]}">{r["pTra"]}</td><td class="mono">{fmt(r["Ingreso"],pn)}</td><td class="mono" style="color:{C["loss"]}">-{fmt(r["Costo"],pn)}</td><td class="mono" style="color:{C["loss"]}">-{fmt(r["FlEnt"],pn)}</td><td class="mono" style="color:{C["loss"]}">-{fmt(r["FlDev"],pn)}</td><td class="mono" style="color:{C["loss"]}">-{fmt(r["FlTra"],pn)}</td><td class="mono" style="color:{C["loss"]}">-{fmt(r["Ads"],pn)}</td><td class="mono" style="color:{utc}">{fmt(r["Utilidad"],pn)}</td><td style="color:{utc}">{mg2}</td></tr>'
-                    st.markdown(f'<div class="kcard" style="padding:0;overflow-x:auto"><table class="otbl"><thead>{h2}</thead><tbody>{rb2}</tbody></table></div><p style="font-size:.7rem;color:{C["sub"]}">*%Can sobre total · %E/%D/%T sobre no-cancelados</p>',unsafe_allow_html=True)
-        
+                    st.markdown(f'<div class="kcard" style="padding:0;overflow-x:auto"><table class="otbl"><thead>{h2}</thead><tbody>{rb2}</tbody></table></div><p style="font-size:.7rem;color:{C["sub"]}">%Can sobre total · %E/%D/%T sobre no-cancelados</p>',unsafe_allow_html=True)
         with ct4:
             cols=[c for c in ["ID","FECHA","PRODUCTO","CANTIDAD","TOTAL DE LA ORDEN","PRECIO FLETE","COSTO DEVOLUCION FLETE","CIUDAD DESTINO","ESTATUS"] if c in df_f.columns]
             if cols:
@@ -921,4 +799,4 @@ with tabs[-1]:
         pa=pd.DataFrame([{"Producto":k,"COP":v} for k,v in sorted(gxp.items(),key=lambda x:-x[1])]);fp_=px.bar(pa,x="Producto",y="COP",color_discrete_sequence=[C["purple"]]);fp_.update_layout(**pl(title="GASTO (COP)"));st.plotly_chart(fp_,use_container_width=True,key="ap")
 
 st.divider()
-st.markdown(f'<div style="text-align:center;color:#475569;font-size:.75rem">v5.5 · {sum(1 for p in PAISES if st.session_state.get(f"_b_{p}"))} países · {f_ini.strftime("%d/%m")}–{f_fin.strftime("%d/%m/%Y")}</div>',unsafe_allow_html=True)
+st.markdown(f'<div style="text-align:center;color:#475569;font-size:.75rem">v5.4 · {sum(1 for p in PAISES if st.session_state.get(f"_b_{p}"))} países · {f_ini.strftime("%d/%m")}–{f_fin.strftime("%d/%m/%Y")}</div>',unsafe_allow_html=True)
